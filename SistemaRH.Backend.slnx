@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="SistemaRH.Api.Tests/SistemaRH.Api.Tests.csproj" />
+  <Project Path="SistemaRH.Api/SistemaRH.Api.csproj" />
+</Solution>

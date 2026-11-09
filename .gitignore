@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+*.user
+
+# Banco de dados local (gerado automaticamente, não deve ir pro Git)
+*.db
+*.db-shm
+*.db-wal
+
+# Configuração de produção (nunca commitar segredos reais)
+appsettings.Production.json
+appsettings.*.local.json

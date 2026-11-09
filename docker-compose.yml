@@ -1,0 +1,41 @@
+services:
+  mysql:
+    image: docker.io/library/mysql:8.4
+    container_name: sistemarh-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: sistemarh
+    ports:
+      - "3306:3306"
+    volumes:
+      - sistemarh-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    container_name: sistemarh-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: "Server=mysql;Port=3306;Database=sistemarh;User=root;Password="
+      # Troque esse valor (ou passe por fora, via `podman compose run -e` /
+      # variável de ambiente do shell) antes de expor isso publicamente de
+      # verdade — esse aqui é só um placeholder de desenvolvimento.
+      Jwt__Secret: "troque-esta-chave-antes-de-usar-em-producao-minimo-32-caracteres"
+      Cors__AllowedOrigins__0: "http://localhost:5173"
+      Cors__AllowedOrigins__1: "http://localhost:5174"
+      Cors__AllowedOrigins__2: "https://site-anticipated-butler-skating.trycloudflare.com"
+    ports:
+      - "5080:8080"
+
+volumes:
+  sistemarh-mysql-data:
+    external: true
