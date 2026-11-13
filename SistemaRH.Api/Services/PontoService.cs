@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -76,20 +77,10 @@ public class PontoService : IPontoService
         };
     }
 
-    // Brasil não observa mais horário de verão desde 2019 — Brasília é
-    // sempre UTC-3 —, então um offset fixo já é suficiente aqui e evita
-    // depender do fuso horário configurado no servidor (que normalmente é
-    // UTC dentro do container).
-    private static readonly TimeSpan OffsetBrasilia = TimeSpan.FromHours(-3);
-
     private IQueryable<RegistroPonto> RegistrosDeHojeQuery(int usuarioId)
     {
-        // "Hoje" precisa ser calculado no dia de Brasília, não no dia UTC:
-        // sem isso, marcações feitas depois das 21h (já é meia-noite UTC)
-        // cairiam erradas no dia seguinte.
-        var agoraBrasilia = DateTime.UtcNow + OffsetBrasilia;
-        var inicioDoDia = agoraBrasilia.Date - OffsetBrasilia;
-        var fimDoDia = inicioDoDia.AddDays(1);
+        // "Hoje" é o dia de Brasília, não o dia UTC (ver HorarioBrasilia).
+        var (inicioDoDia, fimDoDia) = HorarioBrasilia.LimitesDoDiaEmUtc(HorarioBrasilia.Hoje());
 
         return _db.RegistrosPonto
             .Where(r => r.UsuarioId == usuarioId && r.RegistradoEm >= inicioDoDia && r.RegistradoEm < fimDoDia)

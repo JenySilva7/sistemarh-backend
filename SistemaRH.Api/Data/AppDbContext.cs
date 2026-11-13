@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SistemaRH.Api.Models;
 
 namespace SistemaRH.Api.Data;
@@ -158,5 +159,35 @@ public class AppDbContext : DbContext
             new Cargo { Id = 3, Nome = "Analista Financeiro", SalarioBase = 4000m, Descricao = "Controle e análise financeira" },
             new Cargo { Id = 4, Nome = "Vendedor", SalarioBase = 2800m, Descricao = "Atendimento e vendas" }
         );
+
+        AplicarConversaoUtcNosInstantes(modelBuilder);
+    }
+
+    /// <summary>Nomes das propriedades que guardam um instante (sempre preenchidas com DateTime.UtcNow).</summary>
+    private static readonly HashSet<string> PropriedadesDeInstante = new() { "CriadoEm", "RegistradoEm" };
+
+    /// <summary>
+    /// A coluna DATETIME do MySQL não guarda fuso, então o valor volta do banco
+    /// como DateTimeKind.Unspecified e sai no JSON sem o "Z" — o app então
+    /// interpreta como horário local e mostra 3h adiantado. Ao ler, marcamos
+    /// como UTC (é o que foi gravado).
+    /// </summary>
+    public static readonly ValueConverter<DateTime, DateTime> ConversorUtc = new(
+        valor => valor,
+        valor => DateTime.SpecifyKind(valor, DateTimeKind.Utc));
+
+    // Só nos instantes: datas de calendário (Ausencia.Data, DataAdmissao,
+    // DataRegistro etc.) precisam continuar sem "Z", senão JS/Dart
+    // converteriam pro fuso local e mostrariam o dia anterior no Brasil.
+    private static void AplicarConversaoUtcNosInstantes(ModelBuilder modelBuilder)
+    {
+        var propriedades = modelBuilder.Model.GetEntityTypes()
+            .SelectMany(e => e.GetProperties())
+            .Where(p => p.ClrType == typeof(DateTime) && PropriedadesDeInstante.Contains(p.Name));
+
+        foreach (var propriedade in propriedades)
+        {
+            propriedade.SetValueConverter(ConversorUtc);
+        }
     }
 }
