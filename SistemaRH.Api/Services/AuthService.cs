@@ -62,10 +62,12 @@ public class AuthService : IAuthService
         _db.Usuarios.Add(usuario);
         await _db.SaveChangesAsync();
 
+        // Conta nova nunca nasce vinculada a um funcionário: o vínculo só é
+        // feito pelo RH (FuncionarioService.DefinirAcessoAppAsync).
         return new AuthResponseDto
         {
             Token = _jwtTokenService.GerarToken(usuario),
-            Usuario = await ParaDtoAsync(usuario),
+            Usuario = await ParaDtoAsync(usuario, funcionario: null),
         };
     }
 
@@ -91,10 +93,18 @@ public class AuthService : IAuthService
             throw new BusinessRuleException(mensagemErro);
         }
 
+        // Só checado depois da senha, pra não revelar a quem não sabe a
+        // senha que essa conta existe e foi desativada.
+        var funcionario = await BuscarFuncionarioVinculadoAsync(usuario);
+        if (funcionario?.Status == StatusFuncionario.Desligado)
+        {
+            throw new BusinessRuleException(MensagemAcessoDesativado);
+        }
+
         return new AuthResponseDto
         {
             Token = _jwtTokenService.GerarToken(usuario),
-            Usuario = await ParaDtoAsync(usuario),
+            Usuario = await ParaDtoAsync(usuario, funcionario),
         };
     }
 
@@ -106,7 +116,31 @@ public class AuthService : IAuthService
             throw new NotFoundException("Usuário não encontrado.");
         }
 
-        return await ParaDtoAsync(usuario);
+        // Um token emitido antes do desligamento continua válido até expirar;
+        // o app consulta /me ao abrir, então barramos aqui também.
+        var funcionario = await BuscarFuncionarioVinculadoAsync(usuario);
+        if (funcionario?.Status == StatusFuncionario.Desligado)
+        {
+            throw new ForbiddenException(MensagemAcessoDesativado);
+        }
+
+        return await ParaDtoAsync(usuario, funcionario);
+    }
+
+    private const string MensagemAcessoDesativado = "Seu acesso foi desativado. Procure o RH.";
+
+    private async Task<Funcionario?> BuscarFuncionarioVinculadoAsync(Usuario usuario)
+    {
+        if (usuario.FuncionarioId is not int funcionarioId)
+        {
+            return null;
+        }
+
+        return await _db.Funcionarios
+            .Include(f => f.Cargo)
+            .Include(f => f.Departamento)
+            .Include(f => f.Gerente)
+            .FirstOrDefaultAsync(f => f.Id == funcionarioId);
     }
 
     /// <summary>
@@ -117,8 +151,11 @@ public class AuthService : IAuthService
     /// créditos e subtraindo débitos). Senão, cai no campo "achatado"
     /// <see cref="Usuario.SaldoBancoHorasMinutos"/> — é o caso de contas
     /// antigas/demo que nunca foram ligadas a um funcionário.
+    ///
+    /// Pelo mesmo motivo, com vínculo, cargo/departamento/admissão/gestor
+    /// vêm do cadastro do RH (fonte oficial), não dos campos da conta.
     /// </summary>
-    private async Task<UsuarioDto> ParaDtoAsync(Usuario usuario)
+    private async Task<UsuarioDto> ParaDtoAsync(Usuario usuario, Funcionario? funcionario)
     {
         var saldoMinutos = usuario.FuncionarioId is int funcionarioId
             ? await LancamentoBancoHorasService.CalcularSaldoAsync(_db, funcionarioId)
@@ -131,10 +168,13 @@ public class AuthService : IAuthService
             Id = usuario.Id,
             Nome = usuario.Nome,
             Email = usuario.Email,
-            Cargo = usuario.Cargo,
-            Departamento = usuario.Departamento,
+            Cargo = funcionario?.Cargo?.Nome ?? usuario.Cargo,
+            Departamento = funcionario?.Departamento?.Nome ?? usuario.Departamento,
             SaldoBancoHorasMinutos = saldoMinutos,
             TotalSolicitacoesAusencia = totalSolicitacoes,
+            FuncionarioId = funcionario?.Id,
+            DataAdmissao = funcionario?.DataAdmissao,
+            GerenteNome = funcionario?.Gerente?.Nome,
         };
     }
 }

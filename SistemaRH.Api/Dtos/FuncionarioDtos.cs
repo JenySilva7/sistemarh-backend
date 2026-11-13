@@ -33,6 +33,21 @@ public class FuncionarioCreateDto
     /// significa que esse funcionário está no topo da hierarquia.
     /// </summary>
     public int? GerenteId { get; set; }
+
+    /// <summary>
+    /// Opcional: se informada, já cria (ou vincula) o login do app desse
+    /// colaborador com essa senha — mesmas regras de POST /api/funcionarios/{id}/acesso-app.
+    /// </summary>
+    public string? SenhaAcessoApp { get; set; }
+}
+
+/// <summary>Senha que o RH define pro colaborador entrar no app (cria o acesso ou redefine a senha).</summary>
+public class DefinirAcessoAppDto
+{
+    // Anulável e sem [MinLength] de propósito: a senha é validada no serviço,
+    // depois de conferir se o funcionário existe/está ativo/tem e-mail, e
+    // sempre com a mensagem em português.
+    public string? Senha { get; set; }
 }
 
 /// <summary>Dados editáveis de um funcionário já cadastrado.</summary>
@@ -92,4 +107,7 @@ public class FuncionarioDto
     /// login ainda foi linkada a esse cadastro.
     /// </summary>
     public int TotalSolicitacoesAusencia { get; set; }
+
+    /// <summary>Se existe uma conta de login (<see cref="Usuario"/>) vinculada a esse funcionário.</summary>
+    public bool PossuiAcessoApp { get; set; }
 }

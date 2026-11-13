@@ -69,6 +69,20 @@ public class FuncionariosController : ControllerBase
         return Ok(await _funcionarioService.DesligarAsync(id, dto));
     }
 
+    /// <summary>
+    /// Cria o acesso do funcionário ao app com a senha informada — ou, se ele
+    /// já tiver acesso, só redefine a senha.
+    /// </summary>
+    [HttpPost("{id:int}/acesso-app")]
+    [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<FuncionarioDto>> DefinirAcessoApp(int id, DefinirAcessoAppDto dto)
+    {
+        return Ok(await _funcionarioService.DefinirAcessoAppAsync(id, dto.Senha ?? string.Empty));
+    }
+
     /// <summary>Extrato completo do banco de horas do funcionário (saldo + lançamentos).</summary>
     [HttpGet("{id:int}/banco-horas")]
     [ProducesResponseType(typeof(ExtratoBancoHorasDto), StatusCodes.Status200OK)]

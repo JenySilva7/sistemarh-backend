@@ -119,8 +119,8 @@ public class LancamentoBancoHorasServiceTests
             SaldoBancoHorasMinutos = 9999, // deve ser ignorado, pois há FuncionarioId
         });
 
-        // Liga manualmente a conta recém-criada ao funcionário (ainda não
-        // existe endpoint público pra isso).
+        // Liga a conta recém-criada ao funcionário direto no banco, pra
+        // testar só o cálculo do saldo (o vínculo pelo RH tem testes próprios).
         var usuario = await db.Usuarios.FindAsync(resultado.Usuario.Id);
         usuario!.FuncionarioId = funcionarioId;
         await db.SaveChangesAsync();

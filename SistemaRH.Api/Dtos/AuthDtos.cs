@@ -51,6 +51,12 @@ public class UsuarioDto
 
     /// <summary>Quantas ausências/justificativas esse usuário já abriu pro RH, no total.</summary>
     public int TotalSolicitacoesAusencia { get; set; }
+
+    // Preenchidos só quando a conta está vinculada a um cadastro de
+    // funcionário; nesse caso, Cargo e Departamento também vêm de lá.
+    public int? FuncionarioId { get; set; }
+    public DateTime? DataAdmissao { get; set; }
+    public string? GerenteNome { get; set; }
 }
 
 /// <summary>O que a API devolve depois de um login (ou registro) bem-sucedido.</summary>

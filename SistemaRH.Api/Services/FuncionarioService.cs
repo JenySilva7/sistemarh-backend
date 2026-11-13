@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
@@ -13,6 +14,7 @@ public interface IFuncionarioService
     Task<FuncionarioDto> CriarAsync(FuncionarioCreateDto dto);
     Task<FuncionarioDto> AtualizarAsync(int id, FuncionarioUpdateDto dto);
     Task<FuncionarioDto> DesligarAsync(int id, DesligarFuncionarioDto dto);
+    Task<FuncionarioDto> DefinirAcessoAppAsync(int funcionarioId, string senha);
 }
 
 /// <summary>
@@ -23,6 +25,7 @@ public interface IFuncionarioService
 public class FuncionarioService : IFuncionarioService
 {
     private readonly AppDbContext _db;
+    private readonly PasswordHasher<Usuario> _passwordHasher = new();
 
     public FuncionarioService(AppDbContext db)
     {
@@ -48,18 +51,30 @@ public class FuncionarioService : IFuncionarioService
 
         var funcionarios = await query.OrderBy(f => f.Nome).ToListAsync();
         var mapaContagens = await ContarSolicitacoesPorFuncionarioAsync();
-        return funcionarios.Select(f => ParaDto(f, mapaContagens.GetValueOrDefault(f.Id, 0))).ToList();
+        // O mapa só tem chave pra funcionário com conta vinculada — então
+        // ContainsKey já responde se ele tem acesso ao app.
+        return funcionarios
+            .Select(f => ParaDto(f, mapaContagens.GetValueOrDefault(f.Id, 0), mapaContagens.ContainsKey(f.Id)))
+            .ToList();
     }
 
     public async Task<FuncionarioDto> ObterPorIdAsync(int id)
     {
         var funcionario = await BuscarOuFalhar(id);
-        var total = await ContarSolicitacoesAsync(id);
-        return ParaDto(funcionario, total);
+        var (total, possuiAcessoApp) = await ContarSolicitacoesAsync(id);
+        return ParaDto(funcionario, total, possuiAcessoApp);
     }
 
     public async Task<FuncionarioDto> CriarAsync(FuncionarioCreateDto dto)
     {
+        // Acesso ao app é opcional no cadastro. Se veio senha, valida antes de
+        // gravar qualquer coisa, pra uma falha não deixar o funcionário criado pela metade.
+        var criarAcessoApp = !string.IsNullOrEmpty(dto.SenhaAcessoApp);
+        if (criarAcessoApp)
+        {
+            ValidarDadosAcessoApp(dto.Email, dto.SenhaAcessoApp);
+        }
+
         var cpfNormalizado = dto.Cpf.Trim();
         var cpfJaExiste = await _db.Funcionarios.AnyAsync(f => f.Cpf == cpfNormalizado);
         if (cpfJaExiste)
@@ -91,10 +106,32 @@ public class FuncionarioService : IFuncionarioService
             CriadoEm = DateTime.UtcNow,
         };
 
+        if (criarAcessoApp)
+        {
+            await PrepararAcessoAppAsync(funcionario, dto.SenhaAcessoApp!);
+        }
+
+        // Um SaveChanges só: funcionário e acesso ao app são gravados juntos.
         _db.Funcionarios.Add(funcionario);
         await _db.SaveChangesAsync();
 
         return await ObterPorIdAsync(funcionario.Id);
+    }
+
+    public async Task<FuncionarioDto> DefinirAcessoAppAsync(int funcionarioId, string senha)
+    {
+        var funcionario = await BuscarOuFalhar(funcionarioId);
+
+        if (funcionario.Status != StatusFuncionario.Ativo)
+        {
+            throw new BusinessRuleException("Não é possível dar acesso ao app a um colaborador desligado.");
+        }
+        ValidarDadosAcessoApp(funcionario.Email, senha);
+
+        await PrepararAcessoAppAsync(funcionario, senha);
+        await _db.SaveChangesAsync();
+
+        return await ObterPorIdAsync(funcionarioId);
     }
 
     public async Task<FuncionarioDto> AtualizarAsync(int id, FuncionarioUpdateDto dto)
@@ -168,13 +205,88 @@ public class FuncionarioService : IFuncionarioService
         }
     }
 
-    /// <summary>Conta as ausências de qualquer Usuario vinculado a esse funcionário.</summary>
-    private async Task<int> ContarSolicitacoesAsync(int funcionarioId)
+    private static void ValidarDadosAcessoApp(string? email, string? senha)
     {
-        return await _db.Usuarios
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            throw new BusinessRuleException("Cadastre um e-mail para esse colaborador antes de criar o acesso ao app.");
+        }
+        if (senha is null || senha.Length < 6)
+        {
+            throw new BusinessRuleException("A senha de acesso ao app precisa ter pelo menos 6 caracteres.");
+        }
+    }
+
+    /// <summary>
+    /// Escolhe qual conta de login vira o acesso desse funcionário e define a
+    /// senha — sem salvar (quem chama decide quando). Ordem:
+    ///   1. conta já vinculada a ele → só troca a senha (serve de "redefinir senha");
+    ///   2. conta com o mesmo e-mail → vincula e sobrescreve a senha, pra que
+    ///      quem tenha se cadastrado sozinho com esse e-mail perca o acesso;
+    ///   3. nenhuma → cria uma conta nova com perfil Funcionario.
+    /// Vínculo só acontece por aqui (ação do RH), nunca no login/cadastro do
+    /// app — sem verificação de e-mail, isso abriria brecha pra roubo de conta.
+    /// </summary>
+    private async Task PrepararAcessoAppAsync(Funcionario funcionario, string senha)
+    {
+        // Funcionário ainda não salvo (Id 0) não tem como já ter conta vinculada.
+        var usuario = funcionario.Id == 0
+            ? null
+            : await _db.Usuarios.FirstOrDefaultAsync(u => u.FuncionarioId == funcionario.Id);
+
+        if (usuario is null)
+        {
+            var emailNormalizado = funcionario.Email!.Trim().ToLower();
+            usuario = await _db.Usuarios.FirstOrDefaultAsync(u => u.Email == emailNormalizado);
+
+            if (usuario is not null)
+            {
+                if (usuario.FuncionarioId is not null && usuario.FuncionarioId != funcionario.Id)
+                {
+                    throw new ConflictException("Esse e-mail já está vinculado ao acesso de outro colaborador.");
+                }
+                // Sem isso, um usuário de RH poderia redefinir a senha de outra
+                // conta de RH/Admin só cadastrando um funcionário com o e-mail dela.
+                if (usuario.Perfil != PerfilUsuario.Funcionario)
+                {
+                    throw new ConflictException("Esse e-mail pertence a uma conta de RH/Admin e não pode ser usado como acesso de colaborador.");
+                }
+                usuario.Funcionario = funcionario;
+            }
+            else
+            {
+                var cargo = funcionario.Cargo ?? await _db.Cargos.FindAsync(funcionario.CargoId);
+                var departamento = funcionario.Departamento ?? await _db.Departamentos.FindAsync(funcionario.DepartamentoId);
+
+                usuario = new Usuario
+                {
+                    Nome = funcionario.Nome,
+                    Email = emailNormalizado,
+                    Perfil = PerfilUsuario.Funcionario,
+                    Cargo = cargo?.Nome ?? string.Empty,
+                    Departamento = departamento?.Nome ?? string.Empty,
+                    Funcionario = funcionario,
+                    CriadoEm = DateTime.UtcNow,
+                };
+                _db.Usuarios.Add(usuario);
+            }
+        }
+
+        usuario.SenhaHash = _passwordHasher.HashPassword(usuario, senha);
+    }
+
+    /// <summary>
+    /// Conta as ausências de qualquer Usuario vinculado a esse funcionário, e
+    /// já aproveita a mesma consulta pra saber se existe algum vinculado.
+    /// </summary>
+    private async Task<(int Total, bool PossuiAcessoApp)> ContarSolicitacoesAsync(int funcionarioId)
+    {
+        var contagensPorUsuario = await _db.Usuarios
             .Where(u => u.FuncionarioId == funcionarioId)
-            .SelectMany(u => u.Ausencias)
-            .CountAsync();
+            .Select(u => u.Ausencias.Count)
+            .ToListAsync();
+
+        return (contagensPorUsuario.Sum(), contagensPorUsuario.Count > 0);
     }
 
     /// <summary>Mesma contagem acima, mas pra todos os funcionários de uma vez (evita 1 query por linha ao listar).</summary>
@@ -206,7 +318,7 @@ public class FuncionarioService : IFuncionarioService
         return funcionario;
     }
 
-    private static FuncionarioDto ParaDto(Funcionario funcionario, int totalSolicitacoes) => new()
+    private static FuncionarioDto ParaDto(Funcionario funcionario, int totalSolicitacoes, bool possuiAcessoApp) => new()
     {
         Id = funcionario.Id,
         Nome = funcionario.Nome,
@@ -224,5 +336,6 @@ public class FuncionarioService : IFuncionarioService
         GerenteId = funcionario.GerenteId,
         GerenteNome = funcionario.Gerente?.Nome,
         TotalSolicitacoesAusencia = totalSolicitacoes,
+        PossuiAcessoApp = possuiAcessoApp,
     };
 }
