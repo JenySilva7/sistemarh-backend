@@ -333,16 +333,21 @@ Erros: `400` (campos inválidos), `409` (e-mail já existe).
 // 200 OK — mesma forma do register
 { "token": "eyJ...", "usuario": { ... } }
 ```
-Erros: `400` (e-mail/senha incorretos, ou campos vazios).
+Erros: `400` (e-mail/senha incorretos, ou campos vazios; ou `"Seu acesso foi desativado. Procure o RH."` se a conta está vinculada a um funcionário desligado).
 
 #### `GET /api/auth/me` — 🔒 autenticada
 
 Devolve os dados do usuário dono do token.
 ```json
 // 200 OK
-{ "id": 1, "nome": "Ana Silva", "email": "ana@empresa.com", "cargo": "Dev", "departamento": "TI" }
+{ "id": 1, "nome": "Ana Silva", "email": "ana@empresa.com", "cargo": "Dev", "departamento": "TI",
+  "saldoBancoHorasMinutos": 90, "totalSolicitacoesAusencia": 2,
+  "funcionarioId": 5, "dataAdmissao": "2024-01-01T00:00:00", "gerenteNome": "Roberto" }
 ```
-Erros: `401` (sem token / token inválido ou expirado).
+Quando a conta está vinculada a um funcionário (`funcionarioId` preenchido), `cargo`, `departamento`, `dataAdmissao`, `gerenteNome` e o saldo vêm do cadastro do RH. Sem vínculo, `funcionarioId`, `dataAdmissao` e `gerenteNome` vêm `null`.
+Erros: `401` (sem token / token inválido ou expirado), `403` (funcionário vinculado foi desligado).
+
+> Instantes (`registradoEm`, `criadoEm`) sempre saem em UTC, com `Z`. Datas de calendário (`data`, `dataAdmissao`, `dataRegistro`...) saem sem fuso, de propósito.
 
 ### Ponto
 
@@ -415,15 +420,24 @@ Essas rotas existem pro site (ainda sem UI pra elas — ver seção 13). A maior
 
 Mesmo padrão dos departamentos. Corpo: `{ "nome": "...", "salarioBase": 5000, "descricao": "..." }`.
 
-#### Funcionários — `GET/POST/PUT /api/funcionarios`, `POST /api/funcionarios/{id}/desligar` — 🔒 RhOuAdmin
+#### Funcionários — `GET/POST/PUT /api/funcionarios`, `POST /api/funcionarios/{id}/desligar`, `POST /api/funcionarios/{id}/acesso-app` — 🔒 RhOuAdmin
 
 ```json
 // POST /api/funcionarios
-{ "nome": "Ana Souza", "cpf": "111.111.111-11", "email": "ana@empresa.com", "dataAdmissao": "2024-01-01", "departamentoId": 1, "cargoId": 1, "gerenteId": null }
+{ "nome": "Ana Souza", "cpf": "111.111.111-11", "email": "ana@empresa.com", "dataAdmissao": "2024-01-01", "departamentoId": 1, "cargoId": 1, "gerenteId": null, "senhaAcessoApp": "senha123" }
 ```
 `GET /api/funcionarios` aceita `?status=0` (0=Ativo, 1=Desligado) e `?departamentoId=` como filtros opcionais.
 `POST /{id}/desligar` aceita `{ "dataDesligamento": "..." }` (opcional — usa a data atual se omitido).
 Erros: `404` (departamento/cargo/funcionário/gestor não existe), `409` (CPF ou e-mail duplicado), `400` (já está desligado, ou tentando ser gestor de si mesmo).
+
+Todo funcionário devolvido traz `possuiAcessoApp` (`true` se já existe uma conta de login vinculada a ele).
+
+**Acesso ao app** — `POST /{id}/acesso-app` com `{ "senha": "..." }` (devolve `200` com o funcionário atualizado), ou `senhaAcessoApp` (opcional) direto no `POST /api/funcionarios`:
+- se já existe conta vinculada a esse funcionário, só troca a senha (serve pra "redefinir senha");
+- senão, se existe conta com o mesmo e-mail, vincula essa conta e **sobrescreve a senha** pela definida pelo RH (o perfil da conta é mantido);
+- senão, cria uma conta nova (perfil `Funcionario`) com o e-mail do funcionário.
+
+Erros: `404` (funcionário não existe), `400` (`"Não é possível dar acesso ao app a um colaborador desligado."`, `"Cadastre um e-mail para esse colaborador antes de criar o acesso ao app."`, `"A senha de acesso ao app precisa ter pelo menos 6 caracteres."`), `409` (`"Esse e-mail já está vinculado ao acesso de outro colaborador."`). No `POST /api/funcionarios`, essas validações rodam antes de gravar — se falharem, nada é criado. O vínculo nunca é feito automaticamente no login/cadastro do app.
 
 `gerenteId` (opcional) é o `Id` de outro funcionário já cadastrado — é essa ligação que monta o **Organograma** no site: quem não tem `gerenteId` aparece no topo; quem tem, aparece "pendurado" embaixo do gestor escolhido. Cada funcionário também devolve `gerenteNome` (preenchido pela API) pra facilitar exibição sem precisar de outra consulta.
 
@@ -448,6 +462,22 @@ Erros: `404` (departamento/cargo/funcionário/gestor não existe), `409` (CPF ou
 
 Corpo do `POST`: `{ "competencia": "2026-08", "salario": 4000, "bonus": 400, "descontos": 300 }` — o `salarioLiquido` é calculado pelo backend (nunca é enviado). Erros: `409` (já existe folha dessa competência pra esse funcionário).
 
+#### Acompanhamento do RH — `/api/rh` — 🔒 RhOuAdmin
+
+`GET /api/rh/ausencias?status=` (status opcional, `0..3`) — justificativas de **todos** os colaboradores, mais recentes primeiro:
+```json
+[ { "id": 1, "tipo": 0, "data": "2026-11-10T00:00:00", "diaInteiro": true, "descricao": "...", "status": 0, "criadoEm": "2026-11-13T15:50:51Z",
+    "usuarioId": 3, "usuarioNome": "Ana", "usuarioEmail": "ana@empresa.com", "funcionarioId": 5 } ]
+```
+`PUT /api/rh/ausencias/{id}/status` com `{ "status": 2 }` — devolve `200` com o mesmo formato acima. Só aceita `1=EmAnalise`, `2=Aprovada` ou `3=Recusada`.
+Erros: `400` (`"Status inválido."`, ou `"Essa justificativa já foi concluída e não pode mais ser alterada."` se já está Aprovada/Recusada), `404` (`"Justificativa de ausência não encontrada."`).
+
+`GET /api/rh/ponto?data=AAAA-MM-DD` (opcional; padrão = hoje) — marcações de todos no dia, no horário de Brasília, ordenadas por nome e depois horário:
+```json
+[ { "id": 1, "tipo": 0, "registradoEm": "2026-11-13T11:02:00Z", "usuarioId": 3, "usuarioNome": "Ana", "usuarioEmail": "ana@empresa.com" } ]
+```
+Erros: `400` (`"Data inválida. Use o formato AAAA-MM-DD."`).
+
 ---
 
 ## 13. Resumo do que foi criado
@@ -464,21 +494,23 @@ Corpo do `POST`: `{ "competencia": "2026-08", "salario": 4000, "bonus": 400, "de
 | `Services/JwtTokenService.cs` | Geração do token JWT (inclui a claim `perfil`, usada pela policy `RhOuAdmin`) |
 | `Services/PontoService.cs` | Regra do "qual é a próxima marcação do dia" |
 | `Services/AusenciaService.cs` | CRUD de ausências, com validação de dono e de status |
-| `Services/DepartamentoService.cs`, `CargoService.cs`, `FuncionarioService.cs`, `LancamentoBancoHorasService.cs`, `RecrutamentoService.cs`, `AvaliacaoService.cs`, `EventoAgendaService.cs`, `FolhaPagamentoService.cs` | Regras de negócio do lado administrativo/RH |
+| `Services/DepartamentoService.cs`, `CargoService.cs`, `FuncionarioService.cs`, `LancamentoBancoHorasService.cs`, `RecrutamentoService.cs`, `AvaliacaoService.cs`, `EventoAgendaService.cs`, `FolhaPagamentoService.cs` | Regras de negócio do lado administrativo/RH (`FuncionarioService` também cria/vincula o acesso ao app) |
+| `Services/RhService.cs` | Visão do RH sobre ausências (com aprovação) e ponto de todos os colaboradores |
 | `Controllers/AuthController.cs`, `PontoController.cs`, `AusenciasController.cs` | As rotas HTTP usadas pelo app |
-| `Controllers/DepartamentosController.cs`, `CargosController.cs`, `FuncionariosController.cs`, `RecrutamentoController.cs`, `AvaliacoesController.cs`, `AgendaController.cs`, `FolhaPagamentoController.cs` | As rotas HTTP administrativas/RH (🔒 RhOuAdmin) |
+| `Controllers/DepartamentosController.cs`, `CargosController.cs`, `FuncionariosController.cs`, `RecrutamentoController.cs`, `AvaliacoesController.cs`, `AgendaController.cs`, `FolhaPagamentoController.cs`, `RhController.cs` | As rotas HTTP administrativas/RH (🔒 RhOuAdmin) |
 | `Middleware/ExceptionMiddleware.cs` | Tratamento global de erros |
 | `Exceptions/ApiExceptions.cs` | Tipos de erro de negócio (404/403/409/400) |
 | `Common/ControllerExtensions.cs` | Helper pra ler o usuário autenticado do token |
+| `Common/HorarioBrasilia.cs` | Conta do "dia de hoje" em Brasília (UTC-3), usada pelo ponto |
 | `Program.cs` | Liga tudo: banco, autenticação (+ policy `RhOuAdmin`), CORS, Swagger, middleware |
 | `appsettings*.json` | Configurações (desenvolvimento / exemplo de produção) |
-| `SistemaRH.Api.Tests/` | 40 testes automatizados (unitários + integração ponta-a-ponta) |
+| `SistemaRH.Api.Tests/` | Testes automatizados (unitários + integração ponta-a-ponta) |
 
 ### O que ainda falta (próximos passos)
 
 1. ~~Integrar o app Flutter~~ ✅ feito — o app já tem tela de login de verdade e consome `/api/auth/login`, mostrando nome, cargo/departamento e saldo do banco de horas reais. Ponto e ausências ainda não foram ligados às telas correspondentes do app.
 2. **Integrar o site React** com a API — tanto o login quanto as rotas administrativas/RH do item 4 (feito) ainda não têm nenhuma tela usando elas.
-3. (Opcional) Um fluxo de **aprovação de ausências pelo RH** — hoje só existe o lado do colaborador (criar/listar/cancelar); mudar o `Status` para `Aprovada`/`Recusada` precisaria de uma rota nova, restrita a `RhOuAdmin` (o mesmo padrão já usado nas rotas administrativas).
+3. ~~Fluxo de **aprovação de ausências pelo RH**~~ ✅ feito — `GET /api/rh/ausencias` e `PUT /api/rh/ausencias/{id}/status` (ver seção 12).
 4. ~~Criar rotas/serviços pro lado administrativo~~ ✅ feito — `Departamento`, `Cargo`, `Funcionario`, `LancamentoBancoHoras`, `Recrutamento`, `Avaliacao`, `EventoAgenda` e `FolhaPagamento` já têm Controller/Service completos, documentados na seção 12 e visíveis no Swagger, protegidos pela policy `RhOuAdmin`. **Ainda falta a UI** — isso é trabalho do site React.
 5. ~~Unificar os dois "banco de horas"~~ ✅ feito — `AuthService` agora calcula o saldo a partir do extrato (`LancamentoBancoHoras`) sempre que a conta (`Usuario`) tem um `FuncionarioId` vinculado; senão, cai de volta no campo achatado `SaldoBancoHorasMinutos` (caso das contas demo que nunca foram ligadas a um `Funcionario`).
-6. **Criar uma rota de gerenciamento de usuários** — hoje não existe nenhum jeito pela API de promover uma conta pra `Rh`/`Admin`, nem de ligar um `Usuario` a um `Funcionario` (`FuncionarioId`). Os dois só são feitos editando o banco direto. É o próximo passo natural pra fechar o ciclo das rotas `RhOuAdmin`.
+6. **Criar uma rota de gerenciamento de usuários** — ligar um `Usuario` a um `Funcionario` já é feito pelo RH (`POST /api/funcionarios/{id}/acesso-app`), mas ainda não existe jeito pela API de promover uma conta pra `Rh`/`Admin` — só editando o banco direto.

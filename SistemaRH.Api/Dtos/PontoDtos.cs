@@ -10,6 +10,14 @@ public class RegistroPontoDto
     public DateTime RegistradoEm { get; set; }
 }
 
+/// <summary>Visão do RH: uma marcação de ponto mais quem bateu.</summary>
+public class RegistroPontoRhDto : RegistroPontoDto
+{
+    public int UsuarioId { get; set; }
+    public string UsuarioNome { get; set; } = string.Empty;
+    public string UsuarioEmail { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// Resposta de POST /api/ponto: a marcação recém-criada, mais qual é a
 /// próxima pendente (ou null se a jornada do dia já foi concluída).

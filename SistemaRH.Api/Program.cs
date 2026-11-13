@@ -97,6 +97,7 @@ builder.Services.AddScoped<IRecrutamentoService, RecrutamentoService>();
 builder.Services.AddScoped<IAvaliacaoService, AvaliacaoService>();
 builder.Services.AddScoped<IEventoAgendaService, EventoAgendaService>();
 builder.Services.AddScoped<IFolhaPagamentoService, FolhaPagamentoService>();
+builder.Services.AddScoped<IRhService, RhService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

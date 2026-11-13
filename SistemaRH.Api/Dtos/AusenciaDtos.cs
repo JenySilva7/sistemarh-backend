@@ -30,3 +30,20 @@ public class AusenciaDto
     public StatusAusencia Status { get; set; }
     public DateTime CriadoEm { get; set; }
 }
+
+/// <summary>Visão do RH: a justificativa mais quem enviou.</summary>
+public class AusenciaRhDto : AusenciaDto
+{
+    public int UsuarioId { get; set; }
+    public string UsuarioNome { get; set; } = string.Empty;
+    public string UsuarioEmail { get; set; } = string.Empty;
+
+    /// <summary>Cadastro de funcionário vinculado à conta de quem enviou (null se a conta não tem vínculo).</summary>
+    public int? FuncionarioId { get; set; }
+}
+
+/// <summary>Novo status de uma justificativa, definido pelo RH (EmAnalise, Aprovada ou Recusada).</summary>
+public class AtualizarStatusAusenciaDto
+{
+    public StatusAusencia Status { get; set; }
+}
