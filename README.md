@@ -441,6 +441,34 @@ Erros: `404` (funcionário não existe), `400` (`"Não é possível dar acesso a
 
 `gerenteId` (opcional) é o `Id` de outro funcionário já cadastrado — é essa ligação que monta o **Organograma** no site: quem não tem `gerenteId` aparece no topo; quem tem, aparece "pendurado" embaixo do gestor escolhido. Cada funcionário também devolve `gerenteNome` (preenchido pela API) pra facilitar exibição sem precisar de outra consulta.
 
+Todo funcionário devolvido traz também `salario` e `valeAlimentacao` (valores individuais dele). No `POST /api/funcionarios`, os dois são opcionais: `"salario": 5500.00` (maior que zero) e `"valeAlimentacao": 700.00` (zero ou mais). Sem `salario`, usa o `salarioBase` do cargo escolhido; sem `valeAlimentacao`, usa o padrão de `600.00`. O `PUT /api/funcionarios/{id}` não mexe nesses valores — eles só mudam pelas rotas de remuneração abaixo.
+
+#### Remuneração — `PUT /api/funcionarios/{id}/salario`, `PUT /{id}/vale-alimentacao`, `POST /{id}/promocao`, `GET /{id}/ajustes-remuneracao` — 🔒 RhOuAdmin
+
+```json
+// PUT /api/funcionarios/{id}/salario
+{ "novoSalario": 5500.00, "dataVigencia": "2026-12-01", "motivo": "Reajuste anual" }
+
+// PUT /api/funcionarios/{id}/vale-alimentacao
+{ "novoValor": 700.00, "dataVigencia": "2026-12-01", "motivo": "Novo acordo coletivo" }
+
+// POST /api/funcionarios/{id}/promocao — troca cargo, departamento e salário de uma vez
+{ "novoCargoId": 10, "novoDepartamentoId": 2, "novoSalario": 9000.00, "dataVigencia": "2026-12-01", "motivo": "Promoção a coordenador" }
+```
+As três devolvem `200` com o funcionário atualizado (mesmo formato do `GET /api/funcionarios/{id}`). O novo valor vale na hora; a `dataVigencia` (data de calendário, `AAAA-MM-DD`) fica registrada no histórico. Cada operação grava uma linha no histórico, com o usuário logado como responsável.
+
+`GET /{id}/ajustes-remuneracao` — histórico do funcionário, mais recentes primeiro (`tipo`: `0=Salario, 1=ValeAlimentacao, 2=Promocao`; em `1`, os valores são do vale; nos outros, do salário; os nomes de cargo/departamento só vêm preenchidos numa promoção):
+```json
+[ { "id": 3, "tipo": 2, "valorAnterior": 5500.00, "valorNovo": 9000.00,
+    "cargoAnteriorNome": "Desenvolvedor", "cargoNovoNome": "Coordenador",
+    "departamentoAnteriorNome": "Tecnologia da Informação", "departamentoNovoNome": "Tecnologia da Informação",
+    "dataVigencia": "2026-12-01T00:00:00", "motivo": "Promoção a coordenador", "responsavelNome": "Equipe RH",
+    "criadoEm": "2026-11-17T17:30:00Z" } ]
+```
+Erros: `404` (`"Funcionário não encontrado."`, e na promoção `"Cargo informado não existe."` / `"Departamento informado não existe."`), `400` (`"Não é possível ajustar a remuneração de um colaborador desligado."`, `"O salário precisa ser maior que zero."`, `"O vale alimentação não pode ser negativo."`, `"Informe a data de vigência."`, `"Informe o motivo do ajuste."`, `"O motivo precisa ter pelo menos 3 caracteres."`, e na promoção `"A promoção precisa mudar o cargo, o departamento ou o salário atual do colaborador."`).
+
+> A migration `AddSalarioValeAlimentacaoEHistorico` preenche os funcionários que já existiam com `salario` = `salarioBase` do cargo e `valeAlimentacao` = `600.00`.
+
 #### Banco de horas — `GET/POST /api/funcionarios/{id}/banco-horas` — 🔒 RhOuAdmin
 
 `GET` devolve o extrato completo: `{ "saldoMinutos": 90, "lancamentos": [ { "id": 1, "dataRegistro": "...", "tipo": 0, "quantidadeMinutos": 120, "descricao": "..." } ] }` (`tipo`: `0=Credito, 1=Debito`).
@@ -485,7 +513,7 @@ Erros: `400` (`"Data inválida. Use o formato AAAA-MM-DD."`).
 | Arquivo/Pasta | O que é |
 |---|---|
 | `Models/Usuario.cs`, `RegistroPonto.cs`, `Ausencia.cs` | As tabelas usadas pelo app (login, ponto, ausências) |
-| `Models/Departamento.cs`, `Cargo.cs`, `Funcionario.cs`, `LancamentoBancoHoras.cs`, `Recrutamento.cs`, `Avaliacao.cs`, `EventoAgenda.cs`, `FolhaPagamento.cs` | Tabelas do lado administrativo/RH |
+| `Models/Departamento.cs`, `Cargo.cs`, `Funcionario.cs`, `LancamentoBancoHoras.cs`, `Recrutamento.cs`, `Avaliacao.cs`, `EventoAgenda.cs`, `FolhaPagamento.cs`, `AjusteRemuneracao.cs` | Tabelas do lado administrativo/RH (`AjusteRemuneracao` é o histórico de salário, vale alimentação e promoções) |
 | `Data/AppDbContext.cs` | Configuração do Entity Framework Core |
 | `Migrations/` | Histórico de criação das tabelas (gerado por `dotnet ef migrations add`) |
 | `Dtos/AuthDtos.cs`, `AusenciaDtos.cs`, `PontoDtos.cs` | Formato de entrada/saída de cada rota do app |
@@ -494,7 +522,7 @@ Erros: `400` (`"Data inválida. Use o formato AAAA-MM-DD."`).
 | `Services/JwtTokenService.cs` | Geração do token JWT (inclui a claim `perfil`, usada pela policy `RhOuAdmin`) |
 | `Services/PontoService.cs` | Regra do "qual é a próxima marcação do dia" |
 | `Services/AusenciaService.cs` | CRUD de ausências, com validação de dono e de status |
-| `Services/DepartamentoService.cs`, `CargoService.cs`, `FuncionarioService.cs`, `LancamentoBancoHorasService.cs`, `RecrutamentoService.cs`, `AvaliacaoService.cs`, `EventoAgendaService.cs`, `FolhaPagamentoService.cs` | Regras de negócio do lado administrativo/RH (`FuncionarioService` também cria/vincula o acesso ao app) |
+| `Services/DepartamentoService.cs`, `CargoService.cs`, `FuncionarioService.cs`, `LancamentoBancoHorasService.cs`, `RecrutamentoService.cs`, `AvaliacaoService.cs`, `EventoAgendaService.cs`, `FolhaPagamentoService.cs` | Regras de negócio do lado administrativo/RH (`FuncionarioService` também cria/vincula o acesso ao app e faz os ajustes de remuneração) |
 | `Services/RhService.cs` | Visão do RH sobre ausências (com aprovação) e ponto de todos os colaboradores |
 | `Controllers/AuthController.cs`, `PontoController.cs`, `AusenciasController.cs` | As rotas HTTP usadas pelo app |
 | `Controllers/DepartamentosController.cs`, `CargosController.cs`, `FuncionariosController.cs`, `RecrutamentoController.cs`, `AvaliacoesController.cs`, `AgendaController.cs`, `FolhaPagamentoController.cs`, `RhController.cs` | As rotas HTTP administrativas/RH (🔒 RhOuAdmin) |

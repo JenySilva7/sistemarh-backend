@@ -28,6 +28,7 @@ public class AppDbContext : DbContext
     public DbSet<Avaliacao> Avaliacoes => Set<Avaliacao>();
     public DbSet<EventoAgenda> EventosAgenda => Set<EventoAgenda>();
     public DbSet<FolhaPagamento> FolhasPagamento => Set<FolhaPagamento>();
+    public DbSet<AjusteRemuneracao> AjustesRemuneracao => Set<AjusteRemuneracao>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -74,6 +75,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Funcionario>()
             .HasIndex(f => f.Email)
             .IsUnique();
+        modelBuilder.Entity<Funcionario>()
+            .Property(f => f.Salario)
+            .HasPrecision(18, 2);
+        modelBuilder.Entity<Funcionario>()
+            .Property(f => f.ValeAlimentacao)
+            .HasPrecision(18, 2);
 
         modelBuilder.Entity<Funcionario>()
             .HasOne(f => f.Departamento)
@@ -140,6 +147,49 @@ public class AppDbContext : DbContext
             .WithMany(f => f.FolhasPagamento)
             .HasForeignKey(fp => fp.FuncionarioId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // ── Histórico de remuneração ─────────────────────────────────────
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .Property(a => a.ValorAnterior)
+            .HasPrecision(18, 2);
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .Property(a => a.ValorNovo)
+            .HasPrecision(18, 2);
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .HasOne(a => a.Funcionario)
+            .WithMany(f => f.AjustesRemuneracao)
+            .HasForeignKey(a => a.FuncionarioId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Restrict nos cargos/departamentos pra o histórico nunca perder a
+        // referência do "de onde pra onde" de uma promoção.
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .HasOne(a => a.CargoAnterior)
+            .WithMany()
+            .HasForeignKey(a => a.CargoAnteriorId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .HasOne(a => a.CargoNovo)
+            .WithMany()
+            .HasForeignKey(a => a.CargoNovoId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .HasOne(a => a.DepartamentoAnterior)
+            .WithMany()
+            .HasForeignKey(a => a.DepartamentoAnteriorId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .HasOne(a => a.DepartamentoNovo)
+            .WithMany()
+            .HasForeignKey(a => a.DepartamentoNovoId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // Se a conta de quem fez o ajuste for excluída, o registro fica (sem o responsável).
+        modelBuilder.Entity<AjusteRemuneracao>()
+            .HasOne(a => a.ResponsavelUsuario)
+            .WithMany()
+            .HasForeignKey(a => a.ResponsavelUsuarioId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         // ── Dados de referência (departamentos e cargos já nascem populados) ──
         // CriadoEm é fixo (em vez de usar o padrão DateTime.UtcNow da classe)

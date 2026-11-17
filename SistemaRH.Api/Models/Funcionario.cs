@@ -35,6 +35,16 @@ public class Funcionario
     public Cargo? Cargo { get; set; }
 
     /// <summary>
+    /// Salário atual desse colaborador. Começa igual ao salário base do cargo
+    /// (se o RH não informar outro no cadastro), mas a partir daí é
+    /// individual: ajustes e promoções mudam só aqui, nunca no cargo.
+    /// </summary>
+    public decimal Salario { get; set; }
+
+    /// <summary>Valor mensal do vale alimentação desse colaborador.</summary>
+    public decimal ValeAlimentacao { get; set; }
+
+    /// <summary>
     /// Gestor direto desse funcionário (outro Funcionario). Nulo pra quem
     /// está no topo da hierarquia (ex.: CEO). É essa relação que monta o
     /// organograma — cada funcionário "pendura" embaixo do seu gestor.
@@ -49,4 +59,5 @@ public class Funcionario
     public List<Avaliacao> Avaliacoes { get; set; } = new();
     public List<EventoAgenda> EventosAgenda { get; set; } = new();
     public List<FolhaPagamento> FolhasPagamento { get; set; } = new();
+    public List<AjusteRemuneracao> AjustesRemuneracao { get; set; } = new();
 }

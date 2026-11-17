@@ -113,9 +113,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Mvc.ApiBehaviorOptions>(options 
 {
     options.InvalidModelStateResponseFactory = context =>
     {
-        var mensagem = string.Join(' ', context.ModelState.Values
-            .SelectMany(v => v.Errors)
-            .Select(e => e.ErrorMessage));
+        var mensagem = SistemaRH.Api.Common.MensagensValidacao.Montar(context.ModelState);
         return new Microsoft.AspNetCore.Mvc.BadRequestObjectResult(new { mensagem });
     };
 });

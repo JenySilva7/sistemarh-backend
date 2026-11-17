@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -15,6 +16,10 @@ public interface IFuncionarioService
     Task<FuncionarioDto> AtualizarAsync(int id, FuncionarioUpdateDto dto);
     Task<FuncionarioDto> DesligarAsync(int id, DesligarFuncionarioDto dto);
     Task<FuncionarioDto> DefinirAcessoAppAsync(int funcionarioId, string senha);
+    Task<FuncionarioDto> AjustarSalarioAsync(int funcionarioId, AjusteSalarioDto dto, int responsavelUsuarioId);
+    Task<FuncionarioDto> AjustarValeAlimentacaoAsync(int funcionarioId, AjusteValeAlimentacaoDto dto, int responsavelUsuarioId);
+    Task<FuncionarioDto> PromoverAsync(int funcionarioId, PromocaoDto dto, int responsavelUsuarioId);
+    Task<List<AjusteRemuneracaoDto>> ListarAjustesRemuneracaoAsync(int funcionarioId);
 }
 
 /// <summary>
@@ -24,6 +29,9 @@ public interface IFuncionarioService
 /// </summary>
 public class FuncionarioService : IFuncionarioService
 {
+    /// <summary>Vale alimentação de quem é cadastrado sem informar o valor.</summary>
+    public const decimal ValeAlimentacaoPadrao = 600m;
+
     private readonly AppDbContext _db;
     private readonly PasswordHasher<Usuario> _passwordHasher = new();
 
@@ -75,8 +83,16 @@ public class FuncionarioService : IFuncionarioService
             ValidarDadosAcessoApp(dto.Email, dto.SenhaAcessoApp);
         }
 
-        var cpfNormalizado = dto.Cpf.Trim();
-        var cpfJaExiste = await _db.Funcionarios.AnyAsync(f => f.Cpf == cpfNormalizado);
+        if (!Cpf.EhValido(dto.Cpf))
+        {
+            throw new BusinessRuleException("CPF inválido. Confira os números digitados.");
+        }
+
+        // Compara só os dígitos: "529.982.247-25" e "52998224725" são o mesmo CPF.
+        var cpfDigitos = Cpf.SomenteDigitos(dto.Cpf);
+        var cpfNormalizado = Cpf.Formatar(cpfDigitos);
+        var cpfJaExiste = await _db.Funcionarios.AnyAsync(f =>
+            f.Cpf.Replace(".", "").Replace("-", "").Replace(" ", "") == cpfDigitos);
         if (cpfJaExiste)
         {
             throw new ConflictException("Já existe um funcionário cadastrado com esse CPF.");
@@ -91,6 +107,10 @@ public class FuncionarioService : IFuncionarioService
         await GarantirDepartamentoECargoExistemAsync(dto.DepartamentoId, dto.CargoId);
         await GarantirGerenteExisteAsync(dto.GerenteId);
 
+        // Sem salário informado, o colaborador entra com o salário base do cargo.
+        var salario = dto.Salario
+            ?? await _db.Cargos.Where(c => c.Id == dto.CargoId).Select(c => c.SalarioBase).SingleAsync();
+
         var funcionario = new Funcionario
         {
             Nome = dto.Nome.Trim(),
@@ -103,6 +123,8 @@ public class FuncionarioService : IFuncionarioService
             DepartamentoId = dto.DepartamentoId,
             CargoId = dto.CargoId,
             GerenteId = dto.GerenteId,
+            Salario = salario,
+            ValeAlimentacao = dto.ValeAlimentacao ?? ValeAlimentacaoPadrao,
             CriadoEm = DateTime.UtcNow,
         };
 
@@ -173,10 +195,186 @@ public class FuncionarioService : IFuncionarioService
         }
 
         funcionario.Status = StatusFuncionario.Desligado;
-        funcionario.DataDesligamento = dto.DataDesligamento ?? DateTime.UtcNow;
+        // É uma data de calendário (como a admissão): sem data informada, vale
+        // o dia de hoje em Brasília — UtcNow viraria o dia seguinte depois das 21h.
+        funcionario.DataDesligamento = dto.DataDesligamento ?? HorarioBrasilia.Hoje().ToDateTime(TimeOnly.MinValue);
 
         await _db.SaveChangesAsync();
         return await ObterPorIdAsync(id);
+    }
+
+    // ── Remuneração ─────────────────────────────────────────────────────
+    // Os três ajustes aplicam o novo valor no cadastro na hora (a data de
+    // vigência fica só registrada) e gravam uma linha no histórico, no mesmo
+    // SaveChanges — nunca fica valor alterado sem o registro de quem alterou.
+
+    public async Task<FuncionarioDto> AjustarSalarioAsync(int funcionarioId, AjusteSalarioDto dto, int responsavelUsuarioId)
+    {
+        var funcionario = await BuscarAtivoParaAjusteAsync(funcionarioId);
+        var novoSalario = ValidarNovoSalario(dto.NovoSalario);
+        var (dataVigencia, motivo) = ValidarVigenciaEMotivo(dto.DataVigencia, dto.Motivo);
+
+        _db.AjustesRemuneracao.Add(new AjusteRemuneracao
+        {
+            FuncionarioId = funcionario.Id,
+            Tipo = TipoAjusteRemuneracao.Salario,
+            ValorAnterior = funcionario.Salario,
+            ValorNovo = novoSalario,
+            DataVigencia = dataVigencia,
+            Motivo = motivo,
+            ResponsavelUsuarioId = responsavelUsuarioId,
+            CriadoEm = DateTime.UtcNow,
+        });
+        funcionario.Salario = novoSalario;
+
+        await _db.SaveChangesAsync();
+        return await ObterPorIdAsync(funcionarioId);
+    }
+
+    public async Task<FuncionarioDto> AjustarValeAlimentacaoAsync(int funcionarioId, AjusteValeAlimentacaoDto dto, int responsavelUsuarioId)
+    {
+        var funcionario = await BuscarAtivoParaAjusteAsync(funcionarioId);
+        var novoValor = dto.NovoValor ?? throw new BusinessRuleException("Informe o novo valor do vale alimentação.");
+        if (novoValor < 0)
+        {
+            throw new BusinessRuleException("O vale alimentação não pode ser negativo.");
+        }
+        var (dataVigencia, motivo) = ValidarVigenciaEMotivo(dto.DataVigencia, dto.Motivo);
+
+        _db.AjustesRemuneracao.Add(new AjusteRemuneracao
+        {
+            FuncionarioId = funcionario.Id,
+            Tipo = TipoAjusteRemuneracao.ValeAlimentacao,
+            ValorAnterior = funcionario.ValeAlimentacao,
+            ValorNovo = novoValor,
+            DataVigencia = dataVigencia,
+            Motivo = motivo,
+            ResponsavelUsuarioId = responsavelUsuarioId,
+            CriadoEm = DateTime.UtcNow,
+        });
+        funcionario.ValeAlimentacao = novoValor;
+
+        await _db.SaveChangesAsync();
+        return await ObterPorIdAsync(funcionarioId);
+    }
+
+    /// <summary>Troca cargo, departamento e salário de uma vez, registrando os três no histórico.</summary>
+    public async Task<FuncionarioDto> PromoverAsync(int funcionarioId, PromocaoDto dto, int responsavelUsuarioId)
+    {
+        var funcionario = await BuscarAtivoParaAjusteAsync(funcionarioId);
+        var novoSalario = ValidarNovoSalario(dto.NovoSalario);
+        var (dataVigencia, motivo) = ValidarVigenciaEMotivo(dto.DataVigencia, dto.Motivo);
+
+        var novoCargo = await _db.Cargos.FindAsync(dto.NovoCargoId)
+            ?? throw new NotFoundException("Cargo informado não existe.");
+        var novoDepartamento = await _db.Departamentos.FindAsync(dto.NovoDepartamentoId)
+            ?? throw new NotFoundException("Departamento informado não existe.");
+
+        var nadaMudou = funcionario.CargoId == novoCargo.Id
+            && funcionario.DepartamentoId == novoDepartamento.Id
+            && funcionario.Salario == novoSalario;
+        if (nadaMudou)
+        {
+            throw new BusinessRuleException("A promoção precisa mudar o cargo, o departamento ou o salário atual do colaborador.");
+        }
+
+        _db.AjustesRemuneracao.Add(new AjusteRemuneracao
+        {
+            FuncionarioId = funcionario.Id,
+            Tipo = TipoAjusteRemuneracao.Promocao,
+            ValorAnterior = funcionario.Salario,
+            ValorNovo = novoSalario,
+            CargoAnteriorId = funcionario.CargoId,
+            CargoNovoId = novoCargo.Id,
+            DepartamentoAnteriorId = funcionario.DepartamentoId,
+            DepartamentoNovoId = novoDepartamento.Id,
+            DataVigencia = dataVigencia,
+            Motivo = motivo,
+            ResponsavelUsuarioId = responsavelUsuarioId,
+            CriadoEm = DateTime.UtcNow,
+        });
+
+        // Troca a navegação junto com o Id: o funcionário veio com Cargo e
+        // Departamento carregados, e os dois precisam apontar pro mesmo lugar.
+        funcionario.CargoId = novoCargo.Id;
+        funcionario.Cargo = novoCargo;
+        funcionario.DepartamentoId = novoDepartamento.Id;
+        funcionario.Departamento = novoDepartamento;
+        funcionario.Salario = novoSalario;
+
+        await _db.SaveChangesAsync();
+        return await ObterPorIdAsync(funcionarioId);
+    }
+
+    /// <summary>Histórico de remuneração do funcionário, mais recentes primeiro.</summary>
+    public async Task<List<AjusteRemuneracaoDto>> ListarAjustesRemuneracaoAsync(int funcionarioId)
+    {
+        var funcionarioExiste = await _db.Funcionarios.AnyAsync(f => f.Id == funcionarioId);
+        if (!funcionarioExiste)
+        {
+            throw new NotFoundException("Funcionário não encontrado.");
+        }
+
+        // Id no desempate: dois ajustes gravados no mesmo instante continuam
+        // na ordem em que foram feitos.
+        var ajustes = await _db.AjustesRemuneracao
+            .Include(a => a.CargoAnterior)
+            .Include(a => a.CargoNovo)
+            .Include(a => a.DepartamentoAnterior)
+            .Include(a => a.DepartamentoNovo)
+            .Include(a => a.ResponsavelUsuario)
+            .Where(a => a.FuncionarioId == funcionarioId)
+            .OrderByDescending(a => a.CriadoEm)
+            .ThenByDescending(a => a.Id)
+            .ToListAsync();
+
+        return ajustes.Select(ParaAjusteDto).ToList();
+    }
+
+    private async Task<Funcionario> BuscarAtivoParaAjusteAsync(int funcionarioId)
+    {
+        var funcionario = await BuscarOuFalhar(funcionarioId);
+        if (funcionario.Status == StatusFuncionario.Desligado)
+        {
+            throw new BusinessRuleException("Não é possível ajustar a remuneração de um colaborador desligado.");
+        }
+        return funcionario;
+    }
+
+    // As regras abaixo repetem as dos atributos dos DTOs: o serviço não
+    // depende só da validação do controller, e o motivo é conferido já sem
+    // os espaços das pontas (que passariam no [MinLength]).
+    private static decimal ValidarNovoSalario(decimal? novoSalario)
+    {
+        var salario = novoSalario ?? throw new BusinessRuleException("Informe o novo salário.");
+        if (salario <= 0)
+        {
+            throw new BusinessRuleException("O salário precisa ser maior que zero.");
+        }
+        return salario;
+    }
+
+    private static (DateTime DataVigencia, string Motivo) ValidarVigenciaEMotivo(DateTime? dataVigencia, string? motivo)
+    {
+        if (dataVigencia is null)
+        {
+            throw new BusinessRuleException("Informe a data de vigência.");
+        }
+
+        var motivoNormalizado = motivo?.Trim() ?? string.Empty;
+        if (motivoNormalizado.Length == 0)
+        {
+            throw new BusinessRuleException("Informe o motivo do ajuste.");
+        }
+        if (motivoNormalizado.Length < 3)
+        {
+            throw new BusinessRuleException("O motivo precisa ter pelo menos 3 caracteres.");
+        }
+
+        // Data de calendário: guarda só o dia, sem fuso, como as outras datas
+        // (ver AppDbContext.AplicarConversaoUtcNosInstantes).
+        var dia = DateTime.SpecifyKind(dataVigencia.Value.Date, DateTimeKind.Unspecified);
+        return (dia, motivoNormalizado);
     }
 
     private async Task GarantirDepartamentoECargoExistemAsync(int departamentoId, int cargoId)
@@ -333,9 +531,27 @@ public class FuncionarioService : IFuncionarioService
         DepartamentoNome = funcionario.Departamento?.Nome ?? string.Empty,
         CargoId = funcionario.CargoId,
         CargoNome = funcionario.Cargo?.Nome ?? string.Empty,
+        Salario = funcionario.Salario,
+        ValeAlimentacao = funcionario.ValeAlimentacao,
         GerenteId = funcionario.GerenteId,
         GerenteNome = funcionario.Gerente?.Nome,
         TotalSolicitacoesAusencia = totalSolicitacoes,
         PossuiAcessoApp = possuiAcessoApp,
+    };
+
+    private static AjusteRemuneracaoDto ParaAjusteDto(AjusteRemuneracao ajuste) => new()
+    {
+        Id = ajuste.Id,
+        Tipo = ajuste.Tipo,
+        ValorAnterior = ajuste.ValorAnterior,
+        ValorNovo = ajuste.ValorNovo,
+        CargoAnteriorNome = ajuste.CargoAnterior?.Nome,
+        CargoNovoNome = ajuste.CargoNovo?.Nome,
+        DepartamentoAnteriorNome = ajuste.DepartamentoAnterior?.Nome,
+        DepartamentoNovoNome = ajuste.DepartamentoNovo?.Nome,
+        DataVigencia = ajuste.DataVigencia,
+        Motivo = ajuste.Motivo,
+        ResponsavelNome = ajuste.ResponsavelUsuario?.Nome,
+        CriadoEm = ajuste.CriadoEm,
     };
 }

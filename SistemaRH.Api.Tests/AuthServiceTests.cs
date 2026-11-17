@@ -100,7 +100,7 @@ public class AuthServiceTests
         var funcionario = await funcionarioService.CriarAsync(new FuncionarioCreateDto
         {
             Nome = "Carla Dias",
-            Cpf = "1",
+            Cpf = "628.194.821-12",
             Email = "carla@empresa.com",
             DataAdmissao = new DateTime(2025, 3, 10),
             DepartamentoId = departamento.Id,

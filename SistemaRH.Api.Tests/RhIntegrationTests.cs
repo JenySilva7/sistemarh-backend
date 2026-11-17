@@ -49,6 +49,21 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
     private static async Task<string?> LerMensagem(HttpResponseMessage resposta) =>
         (await LerJson(resposta)).GetProperty("mensagem").GetString();
 
+    // O banco é compartilhado entre os testes da classe, então cada cadastro
+    // precisa de um CPF válido e diferente.
+    private static string GerarCpfValido()
+    {
+        var numeros = Enumerable.Range(0, 9).Select(_ => Random.Shared.Next(10)).ToList();
+        for (var quantidade = 9; quantidade <= 10; quantidade++)
+        {
+            var soma = numeros.Select((n, i) => n * (quantidade + 1 - i)).Sum();
+            var resto = soma * 10 % 11;
+            numeros.Add(resto == 10 ? 0 : resto);
+        }
+        var d = string.Concat(numeros);
+        return $"{d[..3]}.{d[3..6]}.{d[6..9]}-{d[9..]}";
+    }
+
     private async Task<string> Logar(string email, string senha)
     {
         var resposta = await CriarCliente().PostAsJsonAsync("/api/auth/login", new LoginDto { Email = email, Senha = senha });
@@ -87,7 +102,7 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         return await rh.PostAsJsonAsync("/api/funcionarios", new FuncionarioCreateDto
         {
             Nome = "Carla Dias",
-            Cpf = Guid.NewGuid().ToString(),
+            Cpf = GerarCpfValido(),
             Email = email,
             DataAdmissao = new DateTime(2025, 3, 10),
             DepartamentoId = departamentoId,
@@ -229,5 +244,192 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
 
         Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
         Assert.Equal("Data inválida. Use o formato AAAA-MM-DD.", await LerMensagem(resposta));
+    }
+
+    // ── Remuneração (salário, vale alimentação e promoção) ──────────────
+
+    [Fact]
+    public async Task Remuneracao_ComContaDeColaborador_Devolve403()
+    {
+        var email = $"colab-{Guid.NewGuid()}@empresa.com";
+        await CriarCliente().PostAsJsonAsync("/api/auth/register", new RegisterDto { Nome = "Colaborador", Email = email, Senha = "senha123" });
+        var app = CriarCliente(await Logar(email, "senha123"));
+        var corpo = new { novoSalario = 5500.00, novoValor = 700.00, novoCargoId = 1, novoDepartamentoId = 1, dataVigencia = "2026-12-01", motivo = "Reajuste anual" };
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.PutAsJsonAsync("/api/funcionarios/1/salario", corpo)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.PutAsJsonAsync("/api/funcionarios/1/vale-alimentacao", corpo)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.PostAsJsonAsync("/api/funcionarios/1/promocao", corpo)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.GetAsync("/api/funcionarios/1/ajustes-remuneracao")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Remuneracao_ContaDoRh_AjustaPromoveEConsultaOHistorico()
+    {
+        var rh = CriarCliente(await CriarContaRhELogar());
+        var departamento = new Departamento { Nome = $"Depto {Guid.NewGuid()}" };
+        var novoDepartamento = new Departamento { Nome = $"Depto {Guid.NewGuid()}" };
+        var cargo = new Cargo { Nome = $"Cargo {Guid.NewGuid()}", SalarioBase = 4000m };
+        var novoCargo = new Cargo { Nome = $"Cargo {Guid.NewGuid()}", SalarioBase = 8000m };
+        await UsarBanco(db =>
+        {
+            db.AddRange(departamento, novoDepartamento, cargo, novoCargo);
+            return Task.CompletedTask;
+        });
+
+        // Cadastro sem salário nem VA: vêm do cargo e do valor padrão.
+        var cadastro = await rh.PostAsJsonAsync("/api/funcionarios", new
+        {
+            nome = "Diego Ramos",
+            cpf = GerarCpfValido(),
+            dataAdmissao = "2025-03-10",
+            departamentoId = departamento.Id,
+            cargoId = cargo.Id,
+        });
+        Assert.Equal(HttpStatusCode.Created, cadastro.StatusCode);
+        var cadastroJson = await LerJson(cadastro);
+        Assert.Equal(4000m, cadastroJson.GetProperty("salario").GetDecimal());
+        Assert.Equal(600m, cadastroJson.GetProperty("valeAlimentacao").GetDecimal());
+        var id = cadastroJson.GetProperty("id").GetInt32();
+
+        var salario = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 4500.00, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        Assert.Equal(HttpStatusCode.OK, salario.StatusCode);
+        Assert.Equal(4500m, (await LerJson(salario)).GetProperty("salario").GetDecimal());
+
+        var vale = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/vale-alimentacao", new { novoValor = 700.00, dataVigencia = "2026-12-01", motivo = "Novo acordo coletivo" });
+        Assert.Equal(HttpStatusCode.OK, vale.StatusCode);
+        Assert.Equal(700m, (await LerJson(vale)).GetProperty("valeAlimentacao").GetDecimal());
+
+        var promocao = await rh.PostAsJsonAsync($"/api/funcionarios/{id}/promocao", new
+        {
+            novoCargoId = novoCargo.Id,
+            novoDepartamentoId = novoDepartamento.Id,
+            novoSalario = 9000.00,
+            dataVigencia = "2026-12-01",
+            motivo = "Promoção a coordenador",
+        });
+        Assert.Equal(HttpStatusCode.OK, promocao.StatusCode);
+        var promovido = await LerJson(promocao);
+        Assert.Equal(novoCargo.Id, promovido.GetProperty("cargoId").GetInt32());
+        Assert.Equal(novoCargo.Nome, promovido.GetProperty("cargoNome").GetString());
+        Assert.Equal(novoDepartamento.Id, promovido.GetProperty("departamentoId").GetInt32());
+        Assert.Equal(novoDepartamento.Nome, promovido.GetProperty("departamentoNome").GetString());
+        Assert.Equal(9000m, promovido.GetProperty("salario").GetDecimal());
+        Assert.Equal(700m, promovido.GetProperty("valeAlimentacao").GetDecimal());
+
+        var historicoResposta = await rh.GetAsync($"/api/funcionarios/{id}/ajustes-remuneracao");
+        Assert.Equal(HttpStatusCode.OK, historicoResposta.StatusCode);
+        var historico = (await LerJson(historicoResposta)).EnumerateArray().ToList();
+        Assert.Equal(new[] { 2, 1, 0 }, historico.Select(a => a.GetProperty("tipo").GetInt32()));
+
+        var ultimo = historico[0];
+        Assert.Equal(4500m, ultimo.GetProperty("valorAnterior").GetDecimal());
+        Assert.Equal(9000m, ultimo.GetProperty("valorNovo").GetDecimal());
+        Assert.Equal(cargo.Nome, ultimo.GetProperty("cargoAnteriorNome").GetString());
+        Assert.Equal(novoCargo.Nome, ultimo.GetProperty("cargoNovoNome").GetString());
+        Assert.Equal(departamento.Nome, ultimo.GetProperty("departamentoAnteriorNome").GetString());
+        Assert.Equal(novoDepartamento.Nome, ultimo.GetProperty("departamentoNovoNome").GetString());
+        Assert.Equal("2026-12-01T00:00:00", ultimo.GetProperty("dataVigencia").GetString()); // data de calendário: sem "Z"
+        Assert.Equal("Promoção a coordenador", ultimo.GetProperty("motivo").GetString());
+        Assert.Equal("Equipe RH", ultimo.GetProperty("responsavelNome").GetString());
+        Assert.EndsWith("Z", ultimo.GetProperty("criadoEm").GetString());
+        Assert.True(ultimo.GetProperty("id").GetInt32() > 0);
+
+        var primeiro = historico[2];
+        Assert.Equal(4000m, primeiro.GetProperty("valorAnterior").GetDecimal());
+        Assert.Equal(4500m, primeiro.GetProperty("valorNovo").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, primeiro.GetProperty("cargoAnteriorNome").ValueKind);
+        Assert.Equal(JsonValueKind.Null, primeiro.GetProperty("departamentoNovoNome").ValueKind);
+    }
+
+    [Fact]
+    public async Task Remuneracao_ComDadosInvalidosOuFuncionarioInexistente_DevolveMensagem()
+    {
+        var rh = CriarCliente(await CriarContaRhELogar());
+        var cadastro = await CriarFuncionario(rh, $"eva-{Guid.NewGuid()}@empresa.com", senhaAcessoApp: null);
+        var id = (await LerJson(cadastro)).GetProperty("id").GetInt32();
+
+        var salarioZero = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 0, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        Assert.Equal(HttpStatusCode.BadRequest, salarioZero.StatusCode);
+        Assert.Equal("O salário precisa ser maior que zero.", await LerMensagem(salarioZero));
+
+        var semMotivo = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 5000, dataVigencia = "2026-12-01", motivo = "" });
+        Assert.Equal(HttpStatusCode.BadRequest, semMotivo.StatusCode);
+        Assert.Contains("Informe o motivo do ajuste.", await LerMensagem(semMotivo));
+
+        var valeNegativo = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/vale-alimentacao", new { novoValor = -1, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        Assert.Equal(HttpStatusCode.BadRequest, valeNegativo.StatusCode);
+        Assert.Equal("O vale alimentação não pode ser negativo.", await LerMensagem(valeNegativo));
+
+        var semData = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 5000, motivo = "Reajuste anual" });
+        Assert.Equal(HttpStatusCode.BadRequest, semData.StatusCode);
+        Assert.Equal("Informe a data de vigência.", await LerMensagem(semData));
+
+        var inexistente = await rh.PutAsJsonAsync("/api/funcionarios/999999/salario", new { novoSalario = 5000, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        Assert.Equal(HttpStatusCode.NotFound, inexistente.StatusCode);
+        Assert.Equal("Funcionário não encontrado.", await LerMensagem(inexistente));
+
+        var historicoInexistente = await rh.GetAsync("/api/funcionarios/999999/ajustes-remuneracao");
+        Assert.Equal(HttpStatusCode.NotFound, historicoInexistente.StatusCode);
+        Assert.Equal("Funcionário não encontrado.", await LerMensagem(historicoInexistente));
+    }
+
+    [Fact]
+    public async Task Cadastro_ComCpfJaExistenteSemMascara_Retorna409()
+    {
+        var rh = CriarCliente(await CriarContaRhELogar());
+        var (departamentoId, cargoId) = await CriarDepartamentoECargo();
+        var cpf = GerarCpfValido();
+        object Corpo(string cpfEnviado, string email) => new
+        {
+            nome = "Helena Prado",
+            cpf = cpfEnviado,
+            email,
+            dataAdmissao = "2025-03-10",
+            departamentoId,
+            cargoId,
+        };
+
+        var primeiro = await rh.PostAsJsonAsync("/api/funcionarios", Corpo(cpf, $"helena-{Guid.NewGuid()}@empresa.com"));
+        Assert.Equal(HttpStatusCode.Created, primeiro.StatusCode);
+
+        var semMascara = cpf.Replace(".", "").Replace("-", "");
+        var duplicado = await rh.PostAsJsonAsync("/api/funcionarios", Corpo(semMascara, $"helena-{Guid.NewGuid()}@empresa.com"));
+        Assert.Equal(HttpStatusCode.Conflict, duplicado.StatusCode);
+        Assert.Equal("Já existe um funcionário cadastrado com esse CPF.", await LerMensagem(duplicado));
+    }
+
+    [Theory]
+    [InlineData("123.456.789-00")]
+    [InlineData("111.111.111-11")]
+    [InlineData("1234")]
+    public async Task Cadastro_ComCpfInvalido_Retorna400(string cpf)
+    {
+        var rh = CriarCliente(await CriarContaRhELogar());
+        var (departamentoId, cargoId) = await CriarDepartamentoECargo();
+
+        var resposta = await rh.PostAsJsonAsync("/api/funcionarios", new
+        {
+            nome = "Otávio Reis",
+            cpf,
+            dataAdmissao = "2025-03-10",
+            departamentoId,
+            cargoId,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
+        Assert.Equal("CPF inválido. Confira os números digitados.", await LerMensagem(resposta));
+    }
+
+    [Fact]
+    public async Task AjusteSalario_ComDataEmFormatoInvalido_RetornaMensagemEmPortugues()
+    {
+        var rh = CriarCliente(await CriarContaRhELogar());
+        var cadastro = await CriarFuncionario(rh, $"lia-{Guid.NewGuid()}@empresa.com", null);
+        var id = (await LerJson(cadastro)).GetProperty("id").GetInt32();
+
+        var resposta = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 8000, dataVigencia = "31/02/2026", motivo = "Reajuste" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
+        Assert.Equal("Data de vigência em formato inválido.", await LerMensagem(resposta));
     }
 }

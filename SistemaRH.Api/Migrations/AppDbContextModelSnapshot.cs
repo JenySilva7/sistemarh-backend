@@ -22,6 +22,70 @@ namespace SistemaRH.Api.Migrations
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
 
+            modelBuilder.Entity("SistemaRH.Api.Models.AjusteRemuneracao", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("CargoAnteriorId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("CargoNovoId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("DataVigencia")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("DepartamentoAnteriorId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("DepartamentoNovoId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("FuncionarioId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Motivo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("ResponsavelUsuarioId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Tipo")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("ValorAnterior")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("ValorNovo")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CargoAnteriorId");
+
+                    b.HasIndex("CargoNovoId");
+
+                    b.HasIndex("DepartamentoAnteriorId");
+
+                    b.HasIndex("DepartamentoNovoId");
+
+                    b.HasIndex("FuncionarioId");
+
+                    b.HasIndex("ResponsavelUsuarioId");
+
+                    b.ToTable("AjustesRemuneracao");
+                });
+
             modelBuilder.Entity("SistemaRH.Api.Models.Ausencia", b =>
                 {
                     b.Property<int>("Id")
@@ -317,11 +381,19 @@ namespace SistemaRH.Api.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<decimal>("Salario")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
                     b.Property<string>("Telefone")
                         .HasColumnType("longtext");
+
+                    b.Property<decimal>("ValeAlimentacao")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
 
                     b.HasKey("Id");
 
@@ -488,6 +560,52 @@ namespace SistemaRH.Api.Migrations
                     b.ToTable("Usuarios");
                 });
 
+            modelBuilder.Entity("SistemaRH.Api.Models.AjusteRemuneracao", b =>
+                {
+                    b.HasOne("SistemaRH.Api.Models.Cargo", "CargoAnterior")
+                        .WithMany()
+                        .HasForeignKey("CargoAnteriorId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SistemaRH.Api.Models.Cargo", "CargoNovo")
+                        .WithMany()
+                        .HasForeignKey("CargoNovoId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SistemaRH.Api.Models.Departamento", "DepartamentoAnterior")
+                        .WithMany()
+                        .HasForeignKey("DepartamentoAnteriorId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SistemaRH.Api.Models.Departamento", "DepartamentoNovo")
+                        .WithMany()
+                        .HasForeignKey("DepartamentoNovoId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SistemaRH.Api.Models.Funcionario", "Funcionario")
+                        .WithMany("AjustesRemuneracao")
+                        .HasForeignKey("FuncionarioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SistemaRH.Api.Models.Usuario", "ResponsavelUsuario")
+                        .WithMany()
+                        .HasForeignKey("ResponsavelUsuarioId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("CargoAnterior");
+
+                    b.Navigation("CargoNovo");
+
+                    b.Navigation("DepartamentoAnterior");
+
+                    b.Navigation("DepartamentoNovo");
+
+                    b.Navigation("Funcionario");
+
+                    b.Navigation("ResponsavelUsuario");
+                });
+
             modelBuilder.Entity("SistemaRH.Api.Models.Ausencia", b =>
                 {
                     b.HasOne("SistemaRH.Api.Models.Usuario", "Usuario")
@@ -601,6 +719,8 @@ namespace SistemaRH.Api.Migrations
 
             modelBuilder.Entity("SistemaRH.Api.Models.Funcionario", b =>
                 {
+                    b.Navigation("AjustesRemuneracao");
+
                     b.Navigation("Avaliacoes");
 
                     b.Navigation("EventosAgenda");

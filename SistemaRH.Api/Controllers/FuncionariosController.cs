@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Models;
 using SistemaRH.Api.Services;
@@ -81,6 +82,45 @@ public class FuncionariosController : ControllerBase
     public async Task<ActionResult<FuncionarioDto>> DefinirAcessoApp(int id, DefinirAcessoAppDto dto)
     {
         return Ok(await _funcionarioService.DefinirAcessoAppAsync(id, dto.Senha ?? string.Empty));
+    }
+
+    /// <summary>Ajusta o salário do funcionário (vale na hora) e registra no histórico de remuneração.</summary>
+    [HttpPut("{id:int}/salario")]
+    [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<FuncionarioDto>> AjustarSalario(int id, AjusteSalarioDto dto)
+    {
+        return Ok(await _funcionarioService.AjustarSalarioAsync(id, dto, this.UsuarioIdAutenticado()));
+    }
+
+    /// <summary>Ajusta o vale alimentação do funcionário (vale na hora) e registra no histórico de remuneração.</summary>
+    [HttpPut("{id:int}/vale-alimentacao")]
+    [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<FuncionarioDto>> AjustarValeAlimentacao(int id, AjusteValeAlimentacaoDto dto)
+    {
+        return Ok(await _funcionarioService.AjustarValeAlimentacaoAsync(id, dto, this.UsuarioIdAutenticado()));
+    }
+
+    /// <summary>Promove o funcionário: novo cargo, departamento e salário de uma vez, com registro no histórico.</summary>
+    [HttpPost("{id:int}/promocao")]
+    [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<FuncionarioDto>> Promover(int id, PromocaoDto dto)
+    {
+        return Ok(await _funcionarioService.PromoverAsync(id, dto, this.UsuarioIdAutenticado()));
+    }
+
+    /// <summary>Histórico de ajustes de salário, vale alimentação e promoções (mais recentes primeiro).</summary>
+    [HttpGet("{id:int}/ajustes-remuneracao")]
+    [ProducesResponseType(typeof(List<AjusteRemuneracaoDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<List<AjusteRemuneracaoDto>>> ListarAjustesRemuneracao(int id)
+    {
+        return Ok(await _funcionarioService.ListarAjustesRemuneracaoAsync(id));
     }
 
     /// <summary>Extrato completo do banco de horas do funcionário (saldo + lançamentos).</summary>

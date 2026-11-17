@@ -81,4 +81,35 @@ public class TimestampUtcTests
         Assert.Equal(DateTimeKind.Utc, lido.Kind);
         Assert.Equal(valorDoBanco.Ticks, lido.Ticks);
     }
+
+    [Fact]
+    public async Task AjusteRemuneracao_CriadoEmVoltaComoUtc_DataVigenciaContinuaSemFuso()
+    {
+        var db = TestUtils.CriarDbContextEmMemoria();
+        var funcionario = new Funcionario
+        {
+            Nome = "Carlos",
+            Cpf = "1",
+            Departamento = new Departamento { Nome = "TI" },
+            Cargo = new Cargo { Nome = "Dev" },
+        };
+        db.AjustesRemuneracao.Add(new AjusteRemuneracao
+        {
+            Funcionario = funcionario,
+            Tipo = TipoAjusteRemuneracao.Salario,
+            ValorAnterior = 4000m,
+            ValorNovo = 4500m,
+            DataVigencia = SemFuso(2026, 12, 1),
+            Motivo = "Reajuste anual",
+            CriadoEm = SemFuso(2026, 11, 17, 14, 30),
+        });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var ajuste = db.AjustesRemuneracao.Single();
+
+        Assert.Equal(DateTimeKind.Utc, ajuste.CriadoEm.Kind);
+        Assert.Equal(SemFuso(2026, 11, 17, 14, 30), ajuste.CriadoEm);
+        Assert.Equal(DateTimeKind.Unspecified, ajuste.DataVigencia.Kind);
+    }
 }
