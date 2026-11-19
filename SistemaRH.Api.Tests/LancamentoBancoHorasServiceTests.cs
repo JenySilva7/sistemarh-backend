@@ -110,20 +110,12 @@ public class LancamentoBancoHorasServiceTests
         });
         await db.SaveChangesAsync();
 
-        var authService = new AuthService(db, new JwtTokenServiceFalso());
-        var resultado = await authService.RegistrarAsync(new Dtos.RegisterDto
-        {
-            Nome = "Vinculado ao Funcionario",
-            Email = "vinculado@empresa.com",
-            Senha = "senha123",
-            SaldoBancoHorasMinutos = 9999, // deve ser ignorado, pois há FuncionarioId
-        });
-
-        // Liga a conta recém-criada ao funcionário direto no banco, pra
-        // testar só o cálculo do saldo (o vínculo pelo RH tem testes próprios).
-        var usuario = await db.Usuarios.FindAsync(resultado.Usuario.Id);
-        usuario!.FuncionarioId = funcionarioId;
+        // Conta ligada ao funcionário direto no banco, pra testar só o cálculo
+        // do saldo (o vínculo pelo RH tem testes próprios).
+        var usuario = TestUtils.CriarUsuario(db, "vinculado@empresa.com", funcionarioId: funcionarioId);
+        usuario.SaldoBancoHorasMinutos = 9999; // deve ser ignorado, pois há FuncionarioId
         await db.SaveChangesAsync();
+        var authService = new AuthService(db, new JwtTokenServiceFalso());
 
         var usuarioAtualizado = await authService.ObterUsuarioAsync(usuario.Id);
 
@@ -134,16 +126,37 @@ public class LancamentoBancoHorasServiceTests
     public async Task AuthService_UsuarioSemFuncionarioVinculado_UsaSaldoAchatado()
     {
         var db = TestUtils.CriarDbContextEmMemoria();
+        // Conta antiga/demo, com o saldo "achatado" já gravado (o register
+        // não aceita mais esse campo vindo do cliente).
+        var usuario = TestUtils.CriarUsuario(db, "semfuncionario@empresa.com");
+        usuario.SaldoBancoHorasMinutos = 450;
+        await db.SaveChangesAsync();
         var authService = new AuthService(db, new JwtTokenServiceFalso());
 
-        var resultado = await authService.RegistrarAsync(new Dtos.RegisterDto
-        {
-            Nome = "Sem Funcionario",
-            Email = "semfuncionario@empresa.com",
-            Senha = "senha123",
-            SaldoBancoHorasMinutos = 450,
-        });
+        var resultado = await authService.LoginAsync(new Dtos.LoginDto { Email = "semfuncionario@empresa.com", Senha = "senha123" });
 
         Assert.Equal(450, resultado.Usuario.SaldoBancoHorasMinutos);
+    }
+
+    [Fact]
+    public async Task Registrar_ComDataTipoOuMinutosInvalidos_LancaBusinessRule()
+    {
+        var service = CriarServico(out var db);
+        var funcionarioId = CriarFuncionario(db);
+
+        var semData = await Assert.ThrowsAsync<BusinessRuleException>(() => service.RegistrarAsync(funcionarioId,
+            new LancamentoBancoHorasCreateDto { Tipo = TipoLancamentoBancoHoras.Credito, QuantidadeMinutos = 60 }));
+        var tipoInvalido = await Assert.ThrowsAsync<BusinessRuleException>(() => service.RegistrarAsync(funcionarioId,
+            new LancamentoBancoHorasCreateDto { DataRegistro = new DateTime(2026, 8, 10), Tipo = (TipoLancamentoBancoHoras)7, QuantidadeMinutos = 60 }));
+        var antesDaAdmissao = await Assert.ThrowsAsync<BusinessRuleException>(() => service.RegistrarAsync(funcionarioId,
+            new LancamentoBancoHorasCreateDto { DataRegistro = new DateTime(2001, 1, 1), Tipo = TipoLancamentoBancoHoras.Credito, QuantidadeMinutos = 60 }));
+        var minutosDemais = await Assert.ThrowsAsync<BusinessRuleException>(() => service.RegistrarAsync(funcionarioId,
+            new LancamentoBancoHorasCreateDto { DataRegistro = new DateTime(2026, 8, 10), Tipo = TipoLancamentoBancoHoras.Credito, QuantidadeMinutos = int.MaxValue }));
+
+        Assert.Equal("Informe a data do lançamento.", semData.Message);
+        Assert.Equal("Tipo de lançamento inválido.", tipoInvalido.Message);
+        Assert.StartsWith("A data do lançamento precisa estar entre 01/01/2023", antesDaAdmissao.Message);
+        Assert.Equal("A quantidade de minutos precisa estar entre 1 e 100000.", minutosDemais.Message);
+        Assert.Empty(db.LancamentosBancoHoras);
     }
 }

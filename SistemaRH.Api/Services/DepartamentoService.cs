@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -16,6 +17,8 @@ public interface IDepartamentoService
 /// <summary>CRUD simples dos departamentos (tabela de referência).</summary>
 public class DepartamentoService : IDepartamentoService
 {
+    private const string MensagemNomeDuplicado = "Já existe um departamento com esse nome.";
+
     private readonly AppDbContext _db;
 
     public DepartamentoService(AppDbContext db)
@@ -25,23 +28,25 @@ public class DepartamentoService : IDepartamentoService
 
     public async Task<List<DepartamentoDto>> ListarAsync()
     {
-        var departamentos = await _db.Departamentos.OrderBy(d => d.Nome).ToListAsync();
+        var departamentos = await _db.Departamentos.OrderBy(d => d.Nome).ThenBy(d => d.Id).ToListAsync();
         return departamentos.Select(ParaDto).ToList();
     }
 
     public async Task<DepartamentoDto> CriarAsync(DepartamentoCreateDto dto)
     {
-        await GarantirNomeDisponivelAsync(dto.Nome, idAtual: null);
+        var nome = Textos.Validar(dto.Nome, Textos.NomeDepartamento);
+        var descricao = Textos.ValidarOpcional(dto.Descricao, Textos.DescricaoCurta);
+        await GarantirNomeDisponivelAsync(nome, idAtual: null);
 
         var departamento = new Departamento
         {
-            Nome = dto.Nome.Trim(),
-            Descricao = dto.Descricao.Trim(),
+            Nome = nome,
+            Descricao = descricao,
             CriadoEm = DateTime.UtcNow,
         };
 
         _db.Departamentos.Add(departamento);
-        await _db.SaveChangesAsync();
+        await SalvarAsync();
 
         return ParaDto(departamento);
     }
@@ -54,24 +59,38 @@ public class DepartamentoService : IDepartamentoService
             throw new NotFoundException("Departamento não encontrado.");
         }
 
-        await GarantirNomeDisponivelAsync(dto.Nome, idAtual: id);
+        var nome = Textos.Validar(dto.Nome, Textos.NomeDepartamento);
+        var descricao = Textos.ValidarOpcional(dto.Descricao, Textos.DescricaoCurta);
+        await GarantirNomeDisponivelAsync(nome, idAtual: id);
 
-        departamento.Nome = dto.Nome.Trim();
-        departamento.Descricao = dto.Descricao.Trim();
-        await _db.SaveChangesAsync();
+        departamento.Nome = nome;
+        departamento.Descricao = descricao;
+        await SalvarAsync();
 
         return ParaDto(departamento);
     }
 
     private async Task GarantirNomeDisponivelAsync(string nome, int? idAtual)
     {
-        var nomeNormalizado = nome.Trim();
         var jaExiste = await _db.Departamentos
-            .AnyAsync(d => d.Nome == nomeNormalizado && d.Id != idAtual);
+            .AnyAsync(d => d.Nome == nome && d.Id != idAtual);
 
         if (jaExiste)
         {
-            throw new ConflictException("Já existe um departamento com esse nome.");
+            throw new ConflictException(MensagemNomeDuplicado);
+        }
+    }
+
+    /// <summary>Dois cadastros iguais ao mesmo tempo: o índice único segura o segundo, que vira 409 (antes 500).</summary>
+    private async Task SalvarAsync()
+    {
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (ErrosBanco.IndiceDuplicado(ex) is not null)
+        {
+            throw new ConflictException(MensagemNomeDuplicado);
         }
     }
 

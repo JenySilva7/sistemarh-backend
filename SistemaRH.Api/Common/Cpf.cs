@@ -1,3 +1,5 @@
+using SistemaRH.Api.Exceptions;
+
 namespace SistemaRH.Api.Common;
 
 /// <summary>
@@ -7,16 +9,28 @@ namespace SistemaRH.Api.Common;
 /// </summary>
 public static class Cpf
 {
-    /// <summary>Só os dígitos do CPF informado (sem pontos, traço ou espaços).</summary>
-    public static string SomenteDigitos(string? cpf) =>
-        new((cpf ?? string.Empty).Where(char.IsDigit).ToArray());
+    public const string MensagemInvalido = "CPF inválido. Confira os números digitados.";
 
     /// <summary>
-    /// Confere tamanho e os dois dígitos verificadores. Sequências repetidas
-    /// (111.111.111-11 etc.) passam no cálculo, mas não são CPFs válidos.
+    /// Só os dígitos ASCII do CPF informado (sem pontos, traço ou espaços).
+    /// char.IsDigit não serve: ele aceita dígitos de outros alfabetos
+    /// (fullwidth, arábicos), que chegavam a ser gravados assim.
+    /// </summary>
+    public static string SomenteDigitos(string? cpf) =>
+        new((cpf ?? string.Empty).Where(c => c is >= '0' and <= '9').ToArray());
+
+    /// <summary>
+    /// Confere os caracteres (só dígitos e a máscara), o tamanho e os dois
+    /// dígitos verificadores. Sequências repetidas (111.111.111-11 etc.)
+    /// passam no cálculo, mas não são CPFs válidos.
     /// </summary>
     public static bool EhValido(string? cpf)
     {
+        if (cpf is null || cpf.Any(c => !(c is >= '0' and <= '9' or '.' or '-' or ' ')))
+        {
+            return false;
+        }
+
         var digitos = SomenteDigitos(cpf);
         if (digitos.Length != 11 || digitos.Distinct().Count() == 1)
         {
@@ -25,6 +39,20 @@ public static class Cpf
 
         var numeros = digitos.Select(c => c - '0').ToArray();
         return numeros[9] == CalcularDigito(numeros, 9) && numeros[10] == CalcularDigito(numeros, 10);
+    }
+
+    /// <summary>Valida e devolve o CPF formatado; lança 400 se for inválido.</summary>
+    public static string Normalizar(string? cpf)
+    {
+        if (string.IsNullOrWhiteSpace(cpf))
+        {
+            throw new BusinessRuleException("O CPF é obrigatório.");
+        }
+        if (!EhValido(cpf.Trim()))
+        {
+            throw new BusinessRuleException(MensagemInvalido);
+        }
+        return Formatar(cpf);
     }
 
     /// <summary>Formata 11 dígitos como 000.000.000-00.</summary>

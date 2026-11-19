@@ -6,12 +6,13 @@ using SistemaRH.Api.Services;
 namespace SistemaRH.Api.Controllers;
 
 /// <summary>
-/// Cargos/funções. Qualquer usuário autenticado pode listar; só RH/Admin
-/// cria ou edita.
+/// Cargos/funções. Tudo aqui é só RH/Admin — inclusive listar, porque cada
+/// cargo traz o salário base (antes qualquer conta logada lia a tabela de
+/// salários).
 /// </summary>
 [ApiController]
 [Route("api/cargos")]
-[Authorize]
+[Authorize(Policy = "RhOuAdmin")]
 public class CargosController : ControllerBase
 {
     private readonly ICargoService _cargoService;

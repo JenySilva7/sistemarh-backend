@@ -34,6 +34,8 @@ public interface IJwtTokenService
 
 public class JwtTokenService : IJwtTokenService
 {
+    public const string ClaimTokenVersao = "tv";
+
     private readonly JwtOptions _options;
 
     public JwtTokenService(Microsoft.Extensions.Options.IOptions<JwtOptions> options)
@@ -51,6 +53,10 @@ public class JwtTokenService : IJwtTokenService
             // Usada pela policy "RhOuAdmin" (ver Program.cs) pra restringir as
             // rotas administrativas/RH a quem tem o perfil certo.
             new Claim("perfil", usuario.Perfil.ToString()),
+            // Versão dos tokens da conta (Usuario.TokenVersao). Conferida a
+            // cada requisição: se a conta fez logout, trocou de senha/perfil/
+            // e-mail ou foi desligada depois que esse token saiu, ele para de valer.
+            new Claim(ClaimTokenVersao, usuario.TokenVersao.ToString(System.Globalization.CultureInfo.InvariantCulture)),
         };
 
         var chave = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.Secret));

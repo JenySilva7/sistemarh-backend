@@ -22,19 +22,57 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task Registrar_ComDadosValidos_CriaUsuarioEDevolveToken()
+    public async Task Registrar_ComDadosValidos_CriaContaComPerfilPadraoFuncionario()
+    {
+        var service = CriarServico(out var db);
+
+        var resultado = await service.RegistrarAsync(new RegisterDto
+        {
+            Nome = "  Ana   Silva ",
+            Email = "  Ana@Empresa.com ",
+            Senha = "senha123",
+        });
+
+        Assert.Equal("ana@empresa.com", resultado.Email);
+        Assert.Equal("Ana Silva", resultado.Nome);
+        Assert.Equal(PerfilUsuario.Funcionario, resultado.Perfil);
+        Assert.Null(resultado.FuncionarioId);
+        var conta = Assert.Single(db.Usuarios);
+        Assert.Equal(0, conta.SaldoBancoHorasMinutos);
+        Assert.Equal(string.Empty, conta.Cargo);
+    }
+
+    [Fact]
+    public async Task Registrar_ComPerfilRh_GravaOPerfil()
     {
         var service = CriarServico(out _);
 
         var resultado = await service.RegistrarAsync(new RegisterDto
         {
+            Nome = "Equipe RH",
+            Email = "rh@empresa.com",
+            Senha = "senha123",
+            Perfil = PerfilUsuario.Rh,
+        });
+
+        Assert.Equal(PerfilUsuario.Rh, resultado.Perfil);
+    }
+
+    [Theory]
+    [InlineData((PerfilUsuario)9, "Perfil inválido.")]
+    public async Task Registrar_ComPerfilForaDaLista_LancaBusinessRule(PerfilUsuario perfil, string mensagem)
+    {
+        var service = CriarServico(out _);
+
+        var erro = await Assert.ThrowsAsync<BusinessRuleException>(() => service.RegistrarAsync(new RegisterDto
+        {
             Nome = "Ana Silva",
             Email = "ana@empresa.com",
             Senha = "senha123",
-        });
+            Perfil = perfil,
+        }));
 
-        Assert.NotEmpty(resultado.Token);
-        Assert.Equal("ana@empresa.com", resultado.Usuario.Email);
+        Assert.Equal(mensagem, erro.Message);
     }
 
     [Fact]
@@ -91,7 +129,7 @@ public class AuthServiceTests
     private static async Task<int> CriarFuncionarioComAcesso(Data.AppDbContext db)
     {
         var departamento = new Departamento { Nome = "Financeiro" };
-        var cargo = new Cargo { Nome = "Analista Financeiro" };
+        var cargo = new Cargo { Nome = "Analista Financeiro", SalarioBase = 4000m };
         var gerente = new Funcionario { Nome = "Roberto Gestor", Cpf = "0", DataAdmissao = new DateTime(2020, 1, 1), Departamento = departamento, Cargo = cargo };
         db.Funcionarios.Add(gerente);
         await db.SaveChangesAsync();
@@ -134,8 +172,12 @@ public class AuthServiceTests
     [Fact]
     public async Task Login_ContaSemVinculo_CamposDoFuncionarioFicamNulos()
     {
-        var service = CriarServico(out _);
-        await service.RegistrarAsync(new RegisterDto { Nome = "Ana", Email = "ana@empresa.com", Senha = "senha123", Cargo = "Dev", Departamento = "TI" });
+        var service = CriarServico(out var db);
+        // Conta antiga, de antes do vínculo pelo RH: cargo/departamento ficam na própria conta.
+        var conta = TestUtils.CriarUsuario(db, "ana@empresa.com", nome: "Ana");
+        conta.Cargo = "Dev";
+        conta.Departamento = "TI";
+        await db.SaveChangesAsync();
 
         var resultado = await service.LoginAsync(new LoginDto { Email = "ana@empresa.com", Senha = "senha123" });
 

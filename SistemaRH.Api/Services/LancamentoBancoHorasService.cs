@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -29,19 +30,28 @@ public class LancamentoBancoHorasService : ILancamentoBancoHorasService
 
     public async Task<LancamentoBancoHorasDto> RegistrarAsync(int funcionarioId, LancamentoBancoHorasCreateDto dto)
     {
-        var funcionarioExiste = await _db.Funcionarios.AnyAsync(f => f.Id == funcionarioId);
-        if (!funcionarioExiste)
+        var funcionario = await _db.Funcionarios.FirstOrDefaultAsync(f => f.Id == funcionarioId)
+            ?? throw new NotFoundException("Funcionário não encontrado.");
+
+        // Data entre a admissão e 1 ano à frente (um débito pode ser uma
+        // folga já combinada); tipo da lista; minutos com teto, pra soma do
+        // saldo nunca estourar.
+        var dataRegistro = Datas.ValidarFaixa(dto.DataRegistro, "Informe a data do lançamento.", "A data do lançamento",
+            funcionario.DataAdmissao, Datas.Hoje().AddDays(365));
+        var tipo = Enums.Validar(dto.Tipo, "Selecione o tipo (crédito ou débito).", "Tipo de lançamento inválido.");
+        if (dto.QuantidadeMinutos is < 1 or > 100_000)
         {
-            throw new NotFoundException("Funcionário não encontrado.");
+            throw new BusinessRuleException("A quantidade de minutos precisa estar entre 1 e 100000.");
         }
+        var descricao = Textos.ValidarOpcional(dto.Descricao, Textos.DescricaoCurta);
 
         var lancamento = new LancamentoBancoHoras
         {
             FuncionarioId = funcionarioId,
-            DataRegistro = dto.DataRegistro,
-            Tipo = dto.Tipo,
+            DataRegistro = dataRegistro,
+            Tipo = tipo,
             QuantidadeMinutos = dto.QuantidadeMinutos,
-            Descricao = dto.Descricao.Trim(),
+            Descricao = descricao,
             CriadoEm = DateTime.UtcNow,
         };
 

@@ -80,10 +80,12 @@ public class FuncionarioServiceTests
         var (departamentoId, cargoId) = CriarDepartamentoECargo(db);
         var funcionario = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId));
 
-        var desligado = await service.DesligarAsync(funcionario.Id, new DesligarFuncionarioDto());
+        var resultado = await service.DesligarAsync(funcionario.Id, new DesligarFuncionarioDto());
 
-        Assert.Equal(StatusFuncionario.Desligado, desligado.Status);
-        Assert.NotNull(desligado.DataDesligamento);
+        Assert.Equal(StatusFuncionario.Desligado, resultado.Funcionario.Status);
+        Assert.Equal(TestUtils.Hoje, resultado.Funcionario.DataDesligamento);
+        Assert.Equal(0, resultado.SubordinadosRealocados);
+        Assert.Null(resultado.NovoGestorNome);
     }
 
     [Fact]
@@ -129,23 +131,23 @@ public class FuncionarioServiceTests
     }
 
     [Fact]
-    public async Task DefinirAcessoApp_ComContaJaCadastradaComMesmoEmail_VinculaESobrescreveSenha()
+    public async Task DefinirAcessoApp_ComContaJaCadastradaComMesmoEmail_RecusaENaoLiga()
     {
+        // Era o "roubo de acesso": quem se cadastrasse antes com o e-mail do
+        // colaborador virava o acesso dele quando o RH liberasse o app.
         var service = CriarServico(out var db);
         var (departamentoId, cargoId) = CriarDepartamentoECargo(db);
-        var authService = new AuthService(db, new JwtTokenServiceFalso());
-        var cadastro = await authService.RegistrarAsync(new RegisterDto { Nome = "Quem Se Cadastrou", Email = "ana.souza@empresa.com", Senha = "senhaAntiga" });
+        TestUtils.CriarUsuario(db, "ana.souza@empresa.com", senha: "senhaAntiga", nome: "Quem Se Cadastrou");
         var funcionario = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId));
 
-        await service.DefinirAcessoAppAsync(funcionario.Id, "senhaDoRh");
+        var erro = await Assert.ThrowsAsync<ConflictException>(() => service.DefinirAcessoAppAsync(funcionario.Id, "senhaDoRh"));
 
+        Assert.Equal("Já existe uma conta de acesso com este e-mail. Fale com o administrador.", erro.Message);
         var usuario = Assert.Single(db.Usuarios);
-        Assert.Equal(cadastro.Usuario.Id, usuario.Id);
-        Assert.Equal(funcionario.Id, usuario.FuncionarioId);
-        Assert.Equal(PerfilUsuario.Funcionario, usuario.Perfil);
-        await Assert.ThrowsAsync<BusinessRuleException>(() => Logar(db, "ana.souza@empresa.com", "senhaAntiga"));
-        var login = await Logar(db, "ana.souza@empresa.com", "senhaDoRh");
-        Assert.Equal(funcionario.Id, login.Usuario.FuncionarioId);
+        Assert.Null(usuario.FuncionarioId);
+        Assert.Equal("Quem Se Cadastrou", usuario.Nome);
+        await Logar(db, "ana.souza@empresa.com", "senhaAntiga");
+        await Assert.ThrowsAsync<BusinessRuleException>(() => Logar(db, "ana.souza@empresa.com", "senhaDoRh"));
     }
 
     [Fact]
@@ -173,35 +175,83 @@ public class FuncionarioServiceTests
         var funcionario = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId));
         await service.DefinirAcessoAppAsync(funcionario.Id, "primeiraSenha");
 
+        var versaoAntes = db.Usuarios.Single().TokenVersao;
+
         await service.DefinirAcessoAppAsync(funcionario.Id, "segundaSenha");
 
-        Assert.Single(db.Usuarios);
+        // Redefinir a senha derruba as sessões abertas (a versão do token sobe).
+        Assert.Equal(versaoAntes + 1, Assert.Single(db.Usuarios).TokenVersao);
         await Assert.ThrowsAsync<BusinessRuleException>(() => Logar(db, "ana.souza@empresa.com", "primeiraSenha"));
         await Logar(db, "ana.souza@empresa.com", "segundaSenha");
     }
 
     [Fact]
-    public async Task DefinirAcessoApp_ComEmailVinculadoAOutroFuncionario_LancaConflictException()
+    public async Task AtualizarEmail_DeQuemTemAcesso_LevaOLoginJuntoEDerrubaOToken()
     {
         var service = CriarServico(out var db);
         var (departamentoId, cargoId) = CriarDepartamentoECargo(db);
-        // Funcionário A ganha acesso com x@, depois o RH troca o e-mail do
-        // cadastro dele — a conta de login continua sendo x@ e vinculada a A.
         var funcionarioA = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId, cpf: "186.091.390-34"));
         await service.DefinirAcessoAppAsync(funcionarioA.Id, "senha123");
+        var versaoAntes = db.Usuarios.Single().TokenVersao;
+
         await service.AtualizarAsync(funcionarioA.Id, new FuncionarioUpdateDto
         {
             Nome = funcionarioA.Nome,
-            Email = "novo.email@empresa.com",
+            Email = "  Novo.Email@Empresa.com ",
             DepartamentoId = departamentoId,
             CargoId = cargoId,
         });
+
+        var conta = Assert.Single(db.Usuarios);
+        Assert.Equal("novo.email@empresa.com", conta.Email);
+        Assert.Equal(versaoAntes + 1, conta.TokenVersao);
+        await Logar(db, "novo.email@empresa.com", "senha123");
+        await Assert.ThrowsAsync<BusinessRuleException>(() => Logar(db, "ana.souza@empresa.com", "senha123"));
+
+        // O e-mail antigo ficou livre: outro colaborador pode recebê-lo com acesso.
         var funcionarioB = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId, cpf: "996.030.824-30"));
+        await service.DefinirAcessoAppAsync(funcionarioB.Id, "senha456");
+        Assert.Equal(2, db.Usuarios.Count());
+    }
 
-        var erro = await Assert.ThrowsAsync<ConflictException>(() => service.DefinirAcessoAppAsync(funcionarioB.Id, "senha456"));
+    [Fact]
+    public async Task AtualizarEmail_RemovendoODeQuemTemAcesso_LancaBusinessRule()
+    {
+        var service = CriarServico(out var db);
+        var (departamentoId, cargoId) = CriarDepartamentoECargo(db);
+        var funcionario = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId));
+        await service.DefinirAcessoAppAsync(funcionario.Id, "senha123");
 
-        Assert.Equal("Esse e-mail já está vinculado ao acesso de outro colaborador.", erro.Message);
-        Assert.Equal(funcionarioA.Id, Assert.Single(db.Usuarios).FuncionarioId);
+        var erro = await Assert.ThrowsAsync<BusinessRuleException>(() => service.AtualizarAsync(funcionario.Id, new FuncionarioUpdateDto
+        {
+            Nome = funcionario.Nome,
+            Email = null,
+            DepartamentoId = departamentoId,
+            CargoId = cargoId,
+        }));
+
+        Assert.Equal("Não é possível remover o e-mail de quem tem acesso ao app.", erro.Message);
+        Assert.Equal("ana.souza@empresa.com", db.Funcionarios.Single().Email);
+    }
+
+    [Fact]
+    public async Task AtualizarEmail_ParaEmailDeOutraConta_Lanca409()
+    {
+        var service = CriarServico(out var db);
+        var (departamentoId, cargoId) = CriarDepartamentoECargo(db);
+        var funcionario = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId));
+        await service.DefinirAcessoAppAsync(funcionario.Id, "senha123");
+        TestUtils.CriarUsuario(db, "rh@empresa.com", perfil: PerfilUsuario.Rh);
+
+        var erro = await Assert.ThrowsAsync<ConflictException>(() => service.AtualizarAsync(funcionario.Id, new FuncionarioUpdateDto
+        {
+            Nome = funcionario.Nome,
+            Email = "rh@empresa.com",
+            DepartamentoId = departamentoId,
+            CargoId = cargoId,
+        }));
+
+        Assert.Equal("Já existe uma conta de acesso com este e-mail.", erro.Message);
     }
 
     [Fact]
@@ -297,25 +347,19 @@ public class FuncionarioServiceTests
     }
 
     [Fact]
-    public async Task Criar_ComSenhaAcessoAppEEmailVinculadoAOutro_NaoCriaNada()
+    public async Task Criar_ComSenhaAcessoAppEEmailDeContaExistente_NaoCriaNada()
     {
         var service = CriarServico(out var db);
         var (departamentoId, cargoId) = CriarDepartamentoECargo(db);
-        var funcionarioA = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId, cpf: "186.091.390-34"));
-        db.Usuarios.Add(new Usuario { Nome = "Conta de A", Email = "ana.souza@empresa.com", FuncionarioId = funcionarioA.Id });
-        await service.AtualizarAsync(funcionarioA.Id, new FuncionarioUpdateDto
-        {
-            Nome = funcionarioA.Nome,
-            Email = "outro@empresa.com",
-            DepartamentoId = departamentoId,
-            CargoId = cargoId,
-        });
+        TestUtils.CriarUsuario(db, "ana.souza@empresa.com", nome: "Conta avulsa");
         var dto = CriarDtoValido(departamentoId, cargoId, cpf: "996.030.824-30");
         dto.SenhaAcessoApp = "senha123";
 
-        await Assert.ThrowsAsync<ConflictException>(() => service.CriarAsync(dto));
+        var erro = await Assert.ThrowsAsync<ConflictException>(() => service.CriarAsync(dto));
 
-        Assert.Single(db.Funcionarios);
+        Assert.Equal(FuncionarioService.MensagemContaComMesmoEmail, erro.Message);
+        Assert.Empty(db.Funcionarios);
+        Assert.Null(Assert.Single(db.Usuarios).FuncionarioId);
     }
 
     [Fact]
@@ -339,7 +383,8 @@ public class FuncionarioServiceTests
 
     // ── Remuneração (salário, vale alimentação e promoção) ──────────────
 
-    private static readonly DateTime Vigencia = new(2026, 12, 1);
+    // Vigência vai da admissão até hoje: usa uma data recente, já passada.
+    private static readonly DateTime Vigencia = TestUtils.Hoje.AddDays(-3);
 
     private static Usuario CriarResponsavel(AppDbContext db)
     {
@@ -445,7 +490,7 @@ public class FuncionarioServiceTests
         var responsavel = CriarResponsavel(db);
         var funcionario = await service.CriarAsync(CriarDtoValido(departamentoId, cargoId));
         var dto = AjusteVale(700m);
-        dto.DataVigencia = new DateTime(2026, 12, 1, 15, 30, 0, DateTimeKind.Utc);
+        dto.DataVigencia = DateTime.SpecifyKind(Vigencia.AddHours(15).AddMinutes(30), DateTimeKind.Utc);
 
         var resultado = await service.AjustarValeAlimentacaoAsync(funcionario.Id, dto, responsavel.Id);
 
@@ -485,11 +530,11 @@ public class FuncionarioServiceTests
 
         var resultado = await service.PromoverAsync(funcionario.Id, Promocao(novoCargoId, novoDepartamentoId, 9500m), responsavel.Id);
 
-        Assert.Equal(novoCargoId, resultado.CargoId);
-        Assert.Equal("Tech Lead", resultado.CargoNome);
-        Assert.Equal(novoDepartamentoId, resultado.DepartamentoId);
-        Assert.Equal("Diretoria", resultado.DepartamentoNome);
-        Assert.Equal(9500m, resultado.Salario);
+        Assert.Equal(novoCargoId, resultado.Funcionario.CargoId);
+        Assert.Equal("Tech Lead", resultado.Funcionario.CargoNome);
+        Assert.Equal(novoDepartamentoId, resultado.Funcionario.DepartamentoId);
+        Assert.Equal("Diretoria", resultado.Funcionario.DepartamentoNome);
+        Assert.Equal(9500m, resultado.Funcionario.Salario);
         var salvo = db.Funcionarios.Single();
         Assert.Equal(novoCargoId, salvo.CargoId);
         Assert.Equal(novoDepartamentoId, salvo.DepartamentoId);
@@ -516,9 +561,9 @@ public class FuncionarioServiceTests
 
         var resultado = await service.PromoverAsync(funcionario.Id, Promocao(cargoId, novoDepartamentoId, 5000m), 1);
 
-        Assert.Equal(novoDepartamentoId, resultado.DepartamentoId);
-        Assert.Equal(cargoId, resultado.CargoId);
-        Assert.Equal(5000m, resultado.Salario);
+        Assert.Equal(novoDepartamentoId, resultado.Funcionario.DepartamentoId);
+        Assert.Equal(cargoId, resultado.Funcionario.CargoId);
+        Assert.Equal(5000m, resultado.Funcionario.Salario);
     }
 
     [Fact]
@@ -531,7 +576,7 @@ public class FuncionarioServiceTests
         var erro = await Assert.ThrowsAsync<BusinessRuleException>(() =>
             service.PromoverAsync(funcionario.Id, Promocao(cargoId, departamentoId, 5000.00m), 1));
 
-        Assert.Equal("A promoção precisa mudar o cargo, o departamento ou o salário atual do colaborador.", erro.Message);
+        Assert.Equal("A promoção precisa mudar o cargo ou o departamento.", erro.Message);
         Assert.Empty(db.AjustesRemuneracao);
     }
 
@@ -596,7 +641,7 @@ public class FuncionarioServiceTests
         var erro = await Assert.ThrowsAsync<BusinessRuleException>(() =>
             service.AjustarSalarioAsync(funcionario.Id, AjusteSalario(novoSalario), 1));
 
-        Assert.Equal("O salário precisa ser maior que zero.", erro.Message);
+        Assert.Equal("O salário precisa estar entre R$ 1,00 e R$ 1.000.000,00.", erro.Message);
         Assert.Empty(db.AjustesRemuneracao);
         Assert.Equal(5000m, db.Funcionarios.Single().Salario);
     }
@@ -642,7 +687,7 @@ public class FuncionarioServiceTests
         var erro = await Assert.ThrowsAsync<BusinessRuleException>(() =>
             service.AjustarValeAlimentacaoAsync(funcionario.Id, AjusteVale(-1m), 1));
 
-        Assert.Equal("O vale alimentação não pode ser negativo.", erro.Message);
+        Assert.Equal("O vale alimentação precisa estar entre R$ 0,00 e R$ 10.000,00.", erro.Message);
         Assert.Equal(600m, db.Funcionarios.Single().ValeAlimentacao);
     }
 

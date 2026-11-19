@@ -1,3 +1,5 @@
+using SistemaRH.Api.Common;
+
 namespace SistemaRH.Api.Models;
 
 public enum TipoAusencia
@@ -24,8 +26,10 @@ public enum StatusAusencia
 /// Uma justificativa de ausência enviada pelo colaborador pro RH analisar.
 /// Só pode ser editada ou cancelada pelo próprio dono, e só enquanto o
 /// status ainda for <see cref="StatusAusencia.Enviada"/> (ver AusenciaService).
+/// <see cref="Versao"/> evita a corrida entre o colaborador editando e o RH
+/// decidindo ao mesmo tempo (quem grava depois recebe 409).
 /// </summary>
-public class Ausencia
+public class Ausencia : IVersionado
 {
     public int Id { get; set; }
     public int UsuarioId { get; set; }
@@ -36,4 +40,5 @@ public class Ausencia
     public string Descricao { get; set; } = string.Empty;
     public StatusAusencia Status { get; set; } = StatusAusencia.Enviada;
     public DateTime CriadoEm { get; set; } = DateTime.UtcNow;
+    public int Versao { get; set; }
 }

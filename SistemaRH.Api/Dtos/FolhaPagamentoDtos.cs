@@ -1,8 +1,15 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
+using SistemaRH.Api.Common;
 
 namespace SistemaRH.Api.Dtos;
 
-/// <summary>Dados pra lançar o holerite de um funcionário num mês específico.</summary>
+/// <summary>
+/// Dados pra lançar o holerite de um funcionário num mês específico. Faixas
+/// (validadas no FolhaPagamentoService): valores de R$ 0,00 a R$ 1.000.000,00
+/// com 2 casas, líquido nunca negativo e competência entre o mês da admissão
+/// e o mês que vem.
+/// </summary>
 public class FolhaPagamentoCreateDto
 {
     /// <summary>Mês de referência, no formato "AAAA-MM" (ex.: "2026-08").</summary>
@@ -10,15 +17,14 @@ public class FolhaPagamentoCreateDto
     [RegularExpression(@"^\d{4}-(0[1-9]|1[0-2])$", ErrorMessage = "A competência precisa estar no formato AAAA-MM (ex.: 2026-08).")]
     public string Competencia { get; set; } = string.Empty;
 
-    [Range(0, double.MaxValue, ErrorMessage = "O salário não pode ser negativo.")]
-    public decimal Salario { get; set; }
+    [Required(ErrorMessage = "Informe o salário da folha.")]
+    public decimal? Salario { get; set; }
 
-    [Range(0, double.MaxValue, ErrorMessage = "O bônus não pode ser negativo.")]
-    public decimal Bonus { get; set; }
+    public decimal? Bonus { get; set; }
 
-    [Range(0, double.MaxValue, ErrorMessage = "Os descontos não podem ser negativos.")]
-    public decimal Descontos { get; set; }
+    public decimal? Descontos { get; set; }
 
+    [JsonConverter(typeof(DataCalendarioJsonConverter))]
     public DateTime? DataPagamento { get; set; }
 }
 

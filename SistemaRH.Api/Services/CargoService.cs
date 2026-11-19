@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -16,6 +17,8 @@ public interface ICargoService
 /// <summary>CRUD simples dos cargos (tabela de referência).</summary>
 public class CargoService : ICargoService
 {
+    private const string MensagemNomeDuplicado = "Já existe um cargo com esse nome.";
+
     private readonly AppDbContext _db;
 
     public CargoService(AppDbContext db)
@@ -25,23 +28,24 @@ public class CargoService : ICargoService
 
     public async Task<List<CargoDto>> ListarAsync()
     {
-        var cargos = await _db.Cargos.OrderBy(c => c.Nome).ToListAsync();
+        var cargos = await _db.Cargos.OrderBy(c => c.Nome).ThenBy(c => c.Id).ToListAsync();
         return cargos.Select(ParaDto).ToList();
     }
 
     public async Task<CargoDto> CriarAsync(CargoCreateDto dto)
     {
-        await GarantirNomeDisponivelAsync(dto.Nome, idAtual: null);
+        var (nome, salarioBase, descricao) = Validar(dto);
+        await GarantirNomeDisponivelAsync(nome, idAtual: null);
 
         var cargo = new Cargo
         {
-            Nome = dto.Nome.Trim(),
-            SalarioBase = dto.SalarioBase,
-            Descricao = dto.Descricao.Trim(),
+            Nome = nome,
+            SalarioBase = salarioBase,
+            Descricao = descricao,
         };
 
         _db.Cargos.Add(cargo);
-        await _db.SaveChangesAsync();
+        await SalvarAsync();
 
         return ParaDto(cargo);
     }
@@ -54,25 +58,47 @@ public class CargoService : ICargoService
             throw new NotFoundException("Cargo não encontrado.");
         }
 
-        await GarantirNomeDisponivelAsync(dto.Nome, idAtual: id);
+        var (nome, salarioBase, descricao) = Validar(dto);
+        await GarantirNomeDisponivelAsync(nome, idAtual: id);
 
-        cargo.Nome = dto.Nome.Trim();
-        cargo.SalarioBase = dto.SalarioBase;
-        cargo.Descricao = dto.Descricao.Trim();
-        await _db.SaveChangesAsync();
+        cargo.Nome = nome;
+        cargo.SalarioBase = salarioBase;
+        cargo.Descricao = descricao;
+        await SalvarAsync();
 
         return ParaDto(cargo);
     }
 
+    private static (string Nome, decimal SalarioBase, string Descricao) Validar(CargoCreateDto dto)
+    {
+        var nome = Textos.Validar(dto.Nome, Textos.NomeCargo);
+        var salarioBase = Dinheiro.Validar(dto.SalarioBase ?? 0m, string.Empty, 0m, Dinheiro.SalarioMaximo,
+            "O salário base precisa estar entre R$ 0,00 e R$ 1.000.000,00.", "o salário base");
+        var descricao = Textos.ValidarOpcional(dto.Descricao, Textos.DescricaoCurta);
+        return (nome, salarioBase, descricao);
+    }
+
     private async Task GarantirNomeDisponivelAsync(string nome, int? idAtual)
     {
-        var nomeNormalizado = nome.Trim();
         var jaExiste = await _db.Cargos
-            .AnyAsync(c => c.Nome == nomeNormalizado && c.Id != idAtual);
+            .AnyAsync(c => c.Nome == nome && c.Id != idAtual);
 
         if (jaExiste)
         {
-            throw new ConflictException("Já existe um cargo com esse nome.");
+            throw new ConflictException(MensagemNomeDuplicado);
+        }
+    }
+
+    /// <summary>Dois cadastros iguais ao mesmo tempo: o índice único segura o segundo, que vira 409 (antes 500).</summary>
+    private async Task SalvarAsync()
+    {
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (ErrosBanco.IndiceDuplicado(ex) is not null)
+        {
+            throw new ConflictException(MensagemNomeDuplicado);
         }
     }
 

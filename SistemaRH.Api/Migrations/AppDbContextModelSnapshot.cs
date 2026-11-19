@@ -53,7 +53,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Motivo")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.Property<int?>("ResponsavelUsuarioId")
                         .HasColumnType("int");
@@ -102,7 +103,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Descricao")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
 
                     b.Property<bool>("DiaInteiro")
                         .HasColumnType("tinyint(1)");
@@ -114,6 +116,10 @@ namespace SistemaRH.Api.Migrations
                         .HasColumnType("int");
 
                     b.Property<int>("UsuarioId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Versao")
+                        .IsConcurrencyToken()
                         .HasColumnType("int");
 
                     b.HasKey("Id");
@@ -133,7 +139,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Comentario")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
 
                     b.Property<DateTime>("DataAvaliacao")
                         .HasColumnType("datetime(6)");
@@ -162,11 +169,13 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Descricao")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.Property<string>("Nome")
                         .IsRequired()
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
 
                     b.Property<decimal>("SalarioBase")
                         .HasPrecision(10, 2)
@@ -223,11 +232,13 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Descricao")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.Property<string>("Nome")
                         .IsRequired()
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
 
                     b.HasKey("Id");
 
@@ -280,7 +291,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Descricao")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
 
                     b.Property<int?>("FuncionarioId")
                         .HasColumnType("int");
@@ -290,7 +302,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Titulo")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
 
                     b.HasKey("Id");
 
@@ -313,7 +326,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Competencia")
                         .IsRequired()
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(7)
+                        .HasColumnType("varchar(7)");
 
                     b.Property<DateTime?>("DataPagamento")
                         .HasColumnType("datetime(6)");
@@ -354,7 +368,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Cpf")
                         .IsRequired()
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(14)
+                        .HasColumnType("varchar(14)");
 
                     b.Property<DateTime>("CriadoEm")
                         .HasColumnType("datetime(6)");
@@ -372,14 +387,16 @@ namespace SistemaRH.Api.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("Email")
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(254)
+                        .HasColumnType("varchar(254)");
 
                     b.Property<int?>("GerenteId")
                         .HasColumnType("int");
 
                     b.Property<string>("Nome")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
 
                     b.Property<decimal>("Salario")
                         .HasPrecision(18, 2)
@@ -389,11 +406,16 @@ namespace SistemaRH.Api.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("Telefone")
-                        .HasColumnType("longtext");
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
 
                     b.Property<decimal>("ValeAlimentacao")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("Versao")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
 
@@ -428,7 +450,8 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Descricao")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.Property<int>("FuncionarioId")
                         .HasColumnType("int");
@@ -446,6 +469,58 @@ namespace SistemaRH.Api.Migrations
                     b.ToTable("LancamentosBancoHoras");
                 });
 
+            modelBuilder.Entity("SistemaRH.Api.Models.MensagemRh", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Assunto")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Mensagem")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("RespondidaEm")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("ResponsavelUsuarioId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Resposta")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<int>("UsuarioId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Versao")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ResponsavelUsuarioId");
+
+                    b.HasIndex("UsuarioId");
+
+                    b.HasIndex("Status", "CriadoEm");
+
+                    b.ToTable("MensagensRh");
+                });
+
             modelBuilder.Entity("SistemaRH.Api.Models.Recrutamento", b =>
                 {
                     b.Property<int>("Id")
@@ -461,25 +536,30 @@ namespace SistemaRH.Api.Migrations
                         .HasColumnType("datetime(6)");
 
                     b.Property<string>("Email")
-                        .HasColumnType("longtext");
+                        .HasMaxLength(254)
+                        .HasColumnType("varchar(254)");
 
                     b.Property<string>("NomeCandidato")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
 
                     b.Property<string>("Observacoes")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
 
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
                     b.Property<string>("Telefone")
-                        .HasColumnType("longtext");
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
 
                     b.Property<string>("Vaga")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
 
                     b.HasKey("Id");
 
@@ -520,25 +600,29 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("Cargo")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
 
                     b.Property<DateTime>("CriadoEm")
                         .HasColumnType("datetime(6)");
 
                     b.Property<string>("Departamento")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
 
                     b.Property<string>("Email")
                         .IsRequired()
-                        .HasColumnType("varchar(255)");
+                        .HasMaxLength(254)
+                        .HasColumnType("varchar(254)");
 
                     b.Property<int?>("FuncionarioId")
                         .HasColumnType("int");
 
                     b.Property<string>("Nome")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
 
                     b.Property<int>("Perfil")
                         .HasColumnType("int");
@@ -548,7 +632,11 @@ namespace SistemaRH.Api.Migrations
 
                     b.Property<string>("SenhaHash")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<int>("TokenVersao")
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
 
@@ -686,6 +774,24 @@ namespace SistemaRH.Api.Migrations
                     b.Navigation("Funcionario");
                 });
 
+            modelBuilder.Entity("SistemaRH.Api.Models.MensagemRh", b =>
+                {
+                    b.HasOne("SistemaRH.Api.Models.Usuario", "ResponsavelUsuario")
+                        .WithMany()
+                        .HasForeignKey("ResponsavelUsuarioId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("SistemaRH.Api.Models.Usuario", "Usuario")
+                        .WithMany("MensagensRh")
+                        .HasForeignKey("UsuarioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ResponsavelUsuario");
+
+                    b.Navigation("Usuario");
+                });
+
             modelBuilder.Entity("SistemaRH.Api.Models.RegistroPonto", b =>
                 {
                     b.HasOne("SistemaRH.Api.Models.Usuario", "Usuario")
@@ -735,6 +841,8 @@ namespace SistemaRH.Api.Migrations
             modelBuilder.Entity("SistemaRH.Api.Models.Usuario", b =>
                 {
                     b.Navigation("Ausencias");
+
+                    b.Navigation("MensagensRh");
 
                     b.Navigation("RegistrosPonto");
                 });

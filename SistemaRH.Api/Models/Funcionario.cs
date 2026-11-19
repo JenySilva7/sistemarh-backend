@@ -1,3 +1,5 @@
+using SistemaRH.Api.Common;
+
 namespace SistemaRH.Api.Models;
 
 public enum StatusFuncionario
@@ -16,7 +18,7 @@ public enum StatusFuncionario
 /// feito login no app, e vice-versa. O campo opcional <see cref="Usuario.FuncionarioId"/>
 /// é quem liga as duas pontas quando necessário.
 /// </summary>
-public class Funcionario
+public class Funcionario : IVersionado
 {
     public int Id { get; set; }
     public string Nome { get; set; } = string.Empty;
@@ -54,6 +56,13 @@ public class Funcionario
     public List<Funcionario> Subordinados { get; set; } = new();
 
     public DateTime CriadoEm { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Token de concorrência: sobe a cada alteração (ver IVersionado). O
+    /// painel devolve a versão que tinha na tela e, se outra pessoa gravou
+    /// antes, recebe 409 em vez de desfazer o ajuste dela.
+    /// </summary>
+    public int Versao { get; set; }
 
     public List<LancamentoBancoHoras> LancamentosBancoHoras { get; set; } = new();
     public List<Avaliacao> Avaliacoes { get; set; } = new();

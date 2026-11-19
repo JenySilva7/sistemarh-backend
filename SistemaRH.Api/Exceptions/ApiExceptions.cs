@@ -47,3 +47,18 @@ public class ConflictException : ApiException
     {
     }
 }
+
+/// <summary>
+/// Usado quando o cliente passou do limite de tentativas (ex.: login errado
+/// várias vezes seguidas). Vira 429, com o cabeçalho Retry-After.
+/// </summary>
+public class TooManyRequestsException : ApiException
+{
+    public TimeSpan TentarDeNovoEm { get; }
+
+    public TooManyRequestsException(string message, TimeSpan tentarDeNovoEm)
+        : base(StatusCodes.Status429TooManyRequests, message)
+    {
+        TentarDeNovoEm = tentarDeNovoEm;
+    }
+}

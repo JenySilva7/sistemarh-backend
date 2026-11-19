@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -35,12 +36,28 @@ public class EventoAgendaService : IEventoAgendaService
             query = query.Where(e => e.DataEvento <= ate);
         }
 
-        var eventos = await query.OrderBy(e => e.DataEvento).ToListAsync();
+        var eventos = await query.OrderBy(e => e.DataEvento).ThenBy(e => e.Id).ToListAsync();
         return eventos.Select(ParaDto).ToList();
     }
 
     public async Task<EventoAgendaDto> CriarAsync(EventoAgendaCreateDto dto)
     {
+        var titulo = Textos.Validar(dto.Titulo, Textos.TituloEvento);
+        var descricao = Textos.ValidarOpcional(dto.Descricao, Textos.DescricaoLonga);
+        var tipo = Enums.Validar<TipoEventoAgenda>(dto.Tipo ?? TipoEventoAgenda.Outro, string.Empty, "Tipo de evento inválido.");
+
+        // Data e hora do evento (não é só um dia): confere a faixa pelo dia,
+        // de 1 ano atrás até 2 anos à frente. Sem data, antes virava 01/01/0001.
+        if (dto.DataEvento is not DateTime informada)
+        {
+            throw new BusinessRuleException("Informe a data/hora do evento.");
+        }
+        // Sempre grava a hora de Brasília, sem fuso (o JSON já chega assim
+        // pelo DataHoraBrasiliaJsonConverter; isto cobre quem chama o serviço direto).
+        var dataEvento = Datas.ParaHorarioDeBrasilia(informada);
+        var hoje = Datas.Hoje();
+        Datas.ValidarFaixa(dataEvento, string.Empty, "A data do evento", hoje.AddYears(-1), hoje.AddYears(2));
+
         if (dto.FuncionarioId is not null)
         {
             var funcionarioExiste = await _db.Funcionarios.AnyAsync(f => f.Id == dto.FuncionarioId);
@@ -52,10 +69,10 @@ public class EventoAgendaService : IEventoAgendaService
 
         var evento = new EventoAgenda
         {
-            Titulo = dto.Titulo.Trim(),
-            Descricao = dto.Descricao.Trim(),
-            DataEvento = dto.DataEvento,
-            Tipo = dto.Tipo,
+            Titulo = titulo,
+            Descricao = descricao,
+            DataEvento = dataEvento,
+            Tipo = tipo,
             FuncionarioId = dto.FuncionarioId,
         };
 

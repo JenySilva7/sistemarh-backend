@@ -195,6 +195,74 @@ public class RhServiceTests
     }
 
     [Theory]
+    [InlineData("9999-12-31")]
+    [InlineData("0001-01-01")]
+    [InlineData("1999-12-31")]
+    public async Task ListarPonto_ComDataForaDaFaixa_Lanca400(string data)
+    {
+        // 9999-12-31 estourava o DateTime ao calcular o fim do dia (500).
+        var service = CriarServico(out _);
+
+        var erro = await Assert.ThrowsAsync<BusinessRuleException>(() => service.ListarPontoDoDiaAsync(data));
+
+        Assert.StartsWith("Data fora do período permitido", erro.Message);
+    }
+
+    [Fact]
+    public async Task AtualizarStatus_ComVersaoDaTelaDesatualizada_Lanca409ENaoMuda()
+    {
+        // Uma aba aprova; a outra, carregada antes, tenta recusar.
+        var service = CriarServico(out var db);
+        var ausencia = CriarAusencia(db, CriarUsuario(db, "Ana"));
+        var versaoNaTela = ausencia.Versao;
+        await service.AtualizarStatusAusenciaAsync(ausencia.Id, new AtualizarStatusAusenciaDto { Status = StatusAusencia.EmAnalise, Versao = versaoNaTela });
+
+        var erro = await Assert.ThrowsAsync<ConflictException>(() =>
+            service.AtualizarStatusAusenciaAsync(ausencia.Id, new AtualizarStatusAusenciaDto { Status = StatusAusencia.Recusada, Versao = versaoNaTela }));
+
+        Assert.Equal("Este registro foi alterado por outra pessoa. Atualize a tela e tente de novo.", erro.Message);
+        Assert.Equal(StatusAusencia.EmAnalise, db.Ausencias.Single().Status);
+    }
+
+    [Fact]
+    public async Task AtualizarStatus_DuasDecisoesAoMesmoTempo_ASegundaFalhaPorConcorrencia()
+    {
+        // Duas requisições (dois contextos) leem a mesma versão e gravam: a
+        // segunda não pode "vencer" em silêncio.
+        var nomeDoBanco = Guid.NewGuid().ToString();
+        var db1 = TestUtils.CriarDbContextEmMemoria(nomeDoBanco);
+        var ausencia = CriarAusencia(db1, CriarUsuario(db1, "Ana"));
+        var db2 = TestUtils.CriarDbContextEmMemoria(nomeDoBanco);
+        var lidaPelaSegundaAba = db2.Ausencias.Single(a => a.Id == ausencia.Id);
+
+        await new RhService(db1).AtualizarStatusAusenciaAsync(ausencia.Id, new AtualizarStatusAusenciaDto { Status = StatusAusencia.Aprovada });
+        lidaPelaSegundaAba.Status = StatusAusencia.Recusada;
+
+        await Assert.ThrowsAsync<Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException>(() => db2.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task AtualizarStatus_SobeAVersao()
+    {
+        var service = CriarServico(out var db);
+        var ausencia = CriarAusencia(db, CriarUsuario(db, "Ana"));
+
+        var resultado = await service.AtualizarStatusAusenciaAsync(ausencia.Id, new AtualizarStatusAusenciaDto { Status = StatusAusencia.Aprovada, Versao = 0 });
+
+        Assert.Equal(1, resultado.Versao);
+    }
+
+    [Fact]
+    public async Task ListarAusencias_ComStatusForaDaLista_Lanca400()
+    {
+        var service = CriarServico(out _);
+
+        var erro = await Assert.ThrowsAsync<BusinessRuleException>(() => service.ListarAusenciasAsync((StatusAusencia)42));
+
+        Assert.Equal("Status inválido.", erro.Message);
+    }
+
+    [Theory]
     [InlineData("13/11/2026")]
     [InlineData("2026-13-01")]
     [InlineData("2026-11-13T10:00")]

@@ -20,6 +20,9 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
 {
     private readonly IntegrationTestFactory _factory;
 
+    // A vigência vai da admissão até hoje (data futura é recusada).
+    private static readonly string Vigencia = TestUtils.Iso(TestUtils.Hoje);
+
     public RhIntegrationTests(IntegrationTestFactory factory)
     {
         _factory = factory;
@@ -71,22 +74,24 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         return (await LerJson(resposta)).GetProperty("token").GetString()!;
     }
 
-    private async Task<string> CriarContaRhELogar()
+    // O cadastro público não existe mais: as contas de teste nascem direto no banco.
+    private async Task<string> CriarContaELogar(PerfilUsuario perfil, string nome)
     {
-        var email = $"rh-{Guid.NewGuid()}@empresa.com";
-        await CriarCliente().PostAsJsonAsync("/api/auth/register", new RegisterDto { Nome = "Equipe RH", Email = email, Senha = "senha123" });
+        var email = $"{perfil.ToString().ToLowerInvariant()}-{Guid.NewGuid()}@empresa.com";
         await UsarBanco(db =>
         {
-            db.Usuarios.Single(u => u.Email == email).Perfil = PerfilUsuario.Rh;
+            TestUtils.CriarUsuario(db, email, perfil: perfil, nome: nome);
             return Task.CompletedTask;
         });
         return await Logar(email, "senha123");
     }
 
+    private Task<string> CriarContaRhELogar() => CriarContaELogar(PerfilUsuario.Rh, "Equipe RH");
+
     private async Task<(int DepartamentoId, int CargoId)> CriarDepartamentoECargo()
     {
         var departamento = new Departamento { Nome = $"Depto {Guid.NewGuid()}" };
-        var cargo = new Cargo { Nome = $"Cargo {Guid.NewGuid()}" };
+        var cargo = new Cargo { Nome = $"Cargo {Guid.NewGuid()}", SalarioBase = 4000m };
         await UsarBanco(db =>
         {
             db.Departamentos.Add(departamento);
@@ -160,10 +165,11 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         Assert.Equal(0, marcacao.GetProperty("tipo").GetInt32());
 
         // Colaborador envia uma justificativa; o RH vê e aprova.
+        var dataAusencia = TestUtils.Hoje.AddDays(-8);
         var envio = await app.PostAsJsonAsync("/api/ausencias", new
         {
             tipo = 0,
-            data = "2026-11-10T00:00:00",
+            data = TestUtils.IsoJson(dataAusencia),
             diaInteiro = true,
             descricao = "Consulta médica",
         });
@@ -175,10 +181,11 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         Assert.Equal(funcionarioId, ausencia.GetProperty("funcionarioId").GetInt32());
         Assert.Equal(usuarioId, ausencia.GetProperty("usuarioId").GetInt32());
         Assert.Equal(email, ausencia.GetProperty("usuarioEmail").GetString());
-        Assert.Equal("2026-11-10T00:00:00", ausencia.GetProperty("data").GetString());
+        Assert.Equal(TestUtils.IsoJson(dataAusencia), ausencia.GetProperty("data").GetString());
         Assert.EndsWith("Z", ausencia.GetProperty("criadoEm").GetString());
+        var versao = ausencia.GetProperty("versao").GetInt32();
 
-        var aprovacao = await rh.PutAsJsonAsync($"/api/rh/ausencias/{ausenciaId}/status", new { status = 2 });
+        var aprovacao = await rh.PutAsJsonAsync($"/api/rh/ausencias/{ausenciaId}/status", new { status = 2, versao });
         Assert.Equal(HttpStatusCode.OK, aprovacao.StatusCode);
         Assert.Equal(2, (await LerJson(aprovacao)).GetProperty("status").GetInt32());
 
@@ -186,13 +193,15 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         Assert.Equal(HttpStatusCode.BadRequest, mudarDeNovo.StatusCode);
         Assert.Equal("Essa justificativa já foi concluída e não pode mais ser alterada.", await LerMensagem(mudarDeNovo));
 
-        // Desligado: perde o acesso, inclusive com o token antigo.
+        // Desligado: perde o acesso NA HORA, inclusive com o token antigo.
         var desligamento = await rh.PostAsJsonAsync($"/api/funcionarios/{funcionarioId}/desligar", new { });
         Assert.Equal(HttpStatusCode.OK, desligamento.StatusCode);
+        Assert.Equal(1, (await LerJson(desligamento)).GetProperty("funcionario").GetProperty("status").GetInt32());
 
         var me = await app.GetAsync("/api/auth/me");
-        Assert.Equal(HttpStatusCode.Forbidden, me.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
         Assert.Equal("Seu acesso foi desativado. Procure o RH.", await LerMensagem(me));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await app.PostAsync("/api/ponto", null)).StatusCode);
 
         var novoLogin = await CriarCliente().PostAsJsonAsync("/api/auth/login", new LoginDto { Email = email, Senha = "senha123" });
         Assert.Equal(HttpStatusCode.BadRequest, novoLogin.StatusCode);
@@ -227,9 +236,7 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
     [Fact]
     public async Task RotasDoRh_ComContaDeColaborador_Devolvem403()
     {
-        var email = $"colab-{Guid.NewGuid()}@empresa.com";
-        await CriarCliente().PostAsJsonAsync("/api/auth/register", new RegisterDto { Nome = "Colaborador", Email = email, Senha = "senha123" });
-        var app = CriarCliente(await Logar(email, "senha123"));
+        var app = CriarCliente(await CriarContaELogar(PerfilUsuario.Funcionario, "Colaborador"));
 
         Assert.Equal(HttpStatusCode.Forbidden, (await app.GetAsync("/api/rh/ausencias")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await app.GetAsync("/api/rh/ponto")).StatusCode);
@@ -251,10 +258,8 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
     [Fact]
     public async Task Remuneracao_ComContaDeColaborador_Devolve403()
     {
-        var email = $"colab-{Guid.NewGuid()}@empresa.com";
-        await CriarCliente().PostAsJsonAsync("/api/auth/register", new RegisterDto { Nome = "Colaborador", Email = email, Senha = "senha123" });
-        var app = CriarCliente(await Logar(email, "senha123"));
-        var corpo = new { novoSalario = 5500.00, novoValor = 700.00, novoCargoId = 1, novoDepartamentoId = 1, dataVigencia = "2026-12-01", motivo = "Reajuste anual" };
+        var app = CriarCliente(await CriarContaELogar(PerfilUsuario.Funcionario, "Colaborador"));
+        var corpo = new { novoSalario = 5500.00, novoValor = 700.00, novoCargoId = 1, novoDepartamentoId = 1, dataVigencia = Vigencia, motivo = "Reajuste anual" };
 
         Assert.Equal(HttpStatusCode.Forbidden, (await app.PutAsJsonAsync("/api/funcionarios/1/salario", corpo)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await app.PutAsJsonAsync("/api/funcionarios/1/vale-alimentacao", corpo)).StatusCode);
@@ -291,11 +296,11 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         Assert.Equal(600m, cadastroJson.GetProperty("valeAlimentacao").GetDecimal());
         var id = cadastroJson.GetProperty("id").GetInt32();
 
-        var salario = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 4500.00, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        var salario = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 4500.00, dataVigencia = Vigencia, motivo = "Reajuste anual" });
         Assert.Equal(HttpStatusCode.OK, salario.StatusCode);
         Assert.Equal(4500m, (await LerJson(salario)).GetProperty("salario").GetDecimal());
 
-        var vale = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/vale-alimentacao", new { novoValor = 700.00, dataVigencia = "2026-12-01", motivo = "Novo acordo coletivo" });
+        var vale = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/vale-alimentacao", new { novoValor = 700.00, dataVigencia = Vigencia, motivo = "Novo acordo coletivo" });
         Assert.Equal(HttpStatusCode.OK, vale.StatusCode);
         Assert.Equal(700m, (await LerJson(vale)).GetProperty("valeAlimentacao").GetDecimal());
 
@@ -304,11 +309,13 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
             novoCargoId = novoCargo.Id,
             novoDepartamentoId = novoDepartamento.Id,
             novoSalario = 9000.00,
-            dataVigencia = "2026-12-01",
+            dataVigencia = Vigencia,
             motivo = "Promoção a coordenador",
         });
         Assert.Equal(HttpStatusCode.OK, promocao.StatusCode);
-        var promovido = await LerJson(promocao);
+        var promocaoJson = await LerJson(promocao);
+        Assert.Equal(0, promocaoJson.GetProperty("subordinadosRealocados").GetInt32());
+        var promovido = promocaoJson.GetProperty("funcionario");
         Assert.Equal(novoCargo.Id, promovido.GetProperty("cargoId").GetInt32());
         Assert.Equal(novoCargo.Nome, promovido.GetProperty("cargoNome").GetString());
         Assert.Equal(novoDepartamento.Id, promovido.GetProperty("departamentoId").GetInt32());
@@ -328,7 +335,7 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         Assert.Equal(novoCargo.Nome, ultimo.GetProperty("cargoNovoNome").GetString());
         Assert.Equal(departamento.Nome, ultimo.GetProperty("departamentoAnteriorNome").GetString());
         Assert.Equal(novoDepartamento.Nome, ultimo.GetProperty("departamentoNovoNome").GetString());
-        Assert.Equal("2026-12-01T00:00:00", ultimo.GetProperty("dataVigencia").GetString()); // data de calendário: sem "Z"
+        Assert.Equal(TestUtils.IsoJson(TestUtils.Hoje), ultimo.GetProperty("dataVigencia").GetString()); // data de calendário: sem "Z"
         Assert.Equal("Promoção a coordenador", ultimo.GetProperty("motivo").GetString());
         Assert.Equal("Equipe RH", ultimo.GetProperty("responsavelNome").GetString());
         Assert.EndsWith("Z", ultimo.GetProperty("criadoEm").GetString());
@@ -348,23 +355,23 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         var cadastro = await CriarFuncionario(rh, $"eva-{Guid.NewGuid()}@empresa.com", senhaAcessoApp: null);
         var id = (await LerJson(cadastro)).GetProperty("id").GetInt32();
 
-        var salarioZero = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 0, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        var salarioZero = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 0, dataVigencia = Vigencia, motivo = "Reajuste anual" });
         Assert.Equal(HttpStatusCode.BadRequest, salarioZero.StatusCode);
-        Assert.Equal("O salário precisa ser maior que zero.", await LerMensagem(salarioZero));
+        Assert.Equal("O salário precisa estar entre R$ 1,00 e R$ 1.000.000,00.", await LerMensagem(salarioZero));
 
-        var semMotivo = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 5000, dataVigencia = "2026-12-01", motivo = "" });
+        var semMotivo = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 5000, dataVigencia = Vigencia, motivo = "" });
         Assert.Equal(HttpStatusCode.BadRequest, semMotivo.StatusCode);
         Assert.Contains("Informe o motivo do ajuste.", await LerMensagem(semMotivo));
 
-        var valeNegativo = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/vale-alimentacao", new { novoValor = -1, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        var valeNegativo = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/vale-alimentacao", new { novoValor = -1, dataVigencia = Vigencia, motivo = "Reajuste anual" });
         Assert.Equal(HttpStatusCode.BadRequest, valeNegativo.StatusCode);
-        Assert.Equal("O vale alimentação não pode ser negativo.", await LerMensagem(valeNegativo));
+        Assert.Equal("O vale alimentação precisa estar entre R$ 0,00 e R$ 10.000,00.", await LerMensagem(valeNegativo));
 
         var semData = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 5000, motivo = "Reajuste anual" });
         Assert.Equal(HttpStatusCode.BadRequest, semData.StatusCode);
         Assert.Equal("Informe a data de vigência.", await LerMensagem(semData));
 
-        var inexistente = await rh.PutAsJsonAsync("/api/funcionarios/999999/salario", new { novoSalario = 5000, dataVigencia = "2026-12-01", motivo = "Reajuste anual" });
+        var inexistente = await rh.PutAsJsonAsync("/api/funcionarios/999999/salario", new { novoSalario = 5000, dataVigencia = Vigencia, motivo = "Reajuste anual" });
         Assert.Equal(HttpStatusCode.NotFound, inexistente.StatusCode);
         Assert.Equal("Funcionário não encontrado.", await LerMensagem(inexistente));
 
@@ -430,6 +437,6 @@ public class RhIntegrationTests : IClassFixture<IntegrationTestFactory>
         var resposta = await rh.PutAsJsonAsync($"/api/funcionarios/{id}/salario", new { novoSalario = 8000, dataVigencia = "31/02/2026", motivo = "Reajuste" });
 
         Assert.Equal(HttpStatusCode.BadRequest, resposta.StatusCode);
-        Assert.Equal("Data de vigência em formato inválido.", await LerMensagem(resposta));
+        Assert.Equal("Data de vigência está em formato inválido.", await LerMensagem(resposta));
     }
 }

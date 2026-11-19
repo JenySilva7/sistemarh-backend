@@ -23,6 +23,9 @@ public interface IRhService
 /// </summary>
 public class RhService : IRhService
 {
+    /// <summary>Primeiro dia aceito em GET /api/rh/ponto (antes disso não há ponto no sistema).</summary>
+    public static readonly DateOnly PrimeiroDiaDoPonto = new(2000, 1, 1);
+
     private readonly AppDbContext _db;
 
     public RhService(AppDbContext db)
@@ -32,20 +35,22 @@ public class RhService : IRhService
 
     public async Task<List<AusenciaRhDto>> ListarAusenciasAsync(StatusAusencia? status)
     {
+        Enums.ValidarFiltro(status, "Status inválido.");
+
         var query = _db.Ausencias.Include(a => a.Usuario).AsQueryable();
         if (status is not null)
         {
             query = query.Where(a => a.Status == status);
         }
 
-        var ausencias = await query.OrderByDescending(a => a.CriadoEm).ToListAsync();
+        var ausencias = await query.OrderByDescending(a => a.CriadoEm).ThenByDescending(a => a.Id).ToListAsync();
         return ausencias.Select(ParaDto).ToList();
     }
 
     public async Task<AusenciaRhDto> AtualizarStatusAusenciaAsync(int ausenciaId, AtualizarStatusAusenciaDto dto)
     {
         // "Enviada" é só o status inicial — o RH não devolve uma justificativa pra ele.
-        var statusPermitido = Enum.IsDefined(dto.Status) && dto.Status != StatusAusencia.Enviada;
+        var statusPermitido = dto.Status is StatusAusencia novo && Enum.IsDefined(novo) && novo != StatusAusencia.Enviada;
         if (!statusPermitido)
         {
             throw new BusinessRuleException("Status inválido.");
@@ -59,12 +64,17 @@ public class RhService : IRhService
             throw new NotFoundException("Justificativa de ausência não encontrada.");
         }
 
-        if (ausencia.Status is StatusAusencia.Aprovada or StatusAusencia.Recusada)
+        // A decisão só vale sobre o que o RH viu: se o colaborador editou ou
+        // outra aba já decidiu depois que a tela carregou, 409. E mesmo sem a
+        // versão na requisição, o UPDATE confere a versão lida aqui — duas
+        // decisões ao mesmo tempo não dão mais "sucesso" para as duas.
+        Concorrencia.ConferirVersao(ausencia, dto.Versao);
+        if (ausencia.Status is not (StatusAusencia.Enviada or StatusAusencia.EmAnalise))
         {
             throw new BusinessRuleException("Essa justificativa já foi concluída e não pode mais ser alterada.");
         }
 
-        ausencia.Status = dto.Status;
+        ausencia.Status = dto.Status!.Value;
         await _db.SaveChangesAsync();
 
         return ParaDto(ausencia);
@@ -80,6 +90,16 @@ public class RhService : IRhService
         else if (!DateOnly.TryParseExact(data.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out dia))
         {
             throw new BusinessRuleException("Data inválida. Use o formato AAAA-MM-DD.");
+        }
+
+        // Uma data como 9999-12-31 estourava o DateTime ao calcular o fim do
+        // dia (500). Fora dessa faixa não existe ponto, então é 400.
+        var ultimoDia = HorarioBrasilia.Hoje().AddDays(366);
+        if (dia < PrimeiroDiaDoPonto || dia > ultimoDia)
+        {
+            var formato = CultureInfo.InvariantCulture;
+            throw new BusinessRuleException(
+                $"Data fora do período permitido: escolha um dia entre {PrimeiroDiaDoPonto.ToString("dd/MM/yyyy", formato)} e {ultimoDia.ToString("dd/MM/yyyy", formato)}.");
         }
 
         var (inicioDoDia, fimDoDia) = HorarioBrasilia.LimitesDoDiaEmUtc(dia);
@@ -114,6 +134,7 @@ public class RhService : IRhService
         Descricao = ausencia.Descricao,
         Status = ausencia.Status,
         CriadoEm = ausencia.CriadoEm,
+        Versao = ausencia.Versao,
         UsuarioId = ausencia.UsuarioId,
         UsuarioNome = ausencia.Usuario?.Nome ?? string.Empty,
         UsuarioEmail = ausencia.Usuario?.Email ?? string.Empty,

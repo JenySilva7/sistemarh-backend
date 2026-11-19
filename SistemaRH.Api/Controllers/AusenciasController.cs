@@ -31,10 +31,9 @@ public class AusenciasController : ControllerBase
         return Ok(ausencias);
     }
 
-    /// <summary>Consulta uma justificativa específica.</summary>
+    /// <summary>Consulta uma justificativa específica (404 se não existir ou não for sua).</summary>
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(AusenciaDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<AusenciaDto>> ObterPorId(int id)
     {
@@ -42,37 +41,47 @@ public class AusenciasController : ControllerBase
         return Ok(ausencia);
     }
 
-    /// <summary>Cria uma nova justificativa de ausência (status inicial: Enviada).</summary>
+    /// <summary>
+    /// Cria uma nova justificativa de ausência (status inicial: Enviada). A
+    /// mesma pessoa, com o mesmo tipo e a mesma data ainda em aberto, dá 409.
+    /// </summary>
     [HttpPost]
     [ProducesResponseType(typeof(AusenciaDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<AusenciaDto>> Criar(AusenciaCreateDto dto)
     {
         var ausencia = await _ausenciaService.CriarAsync(this.UsuarioIdAutenticado(), dto);
         return CreatedAtAction(nameof(ObterPorId), new { id = ausencia.Id }, ausencia);
     }
 
-    /// <summary>Atualiza uma justificativa — só permitido enquanto o status for "Enviada".</summary>
+    /// <summary>
+    /// Atualiza uma justificativa — só permitido enquanto o status for "Enviada".
+    /// A versão da tela pode vir no corpo (<c>versao</c>) ou na query (<c>?versao=</c>).
+    /// </summary>
     [HttpPut("{id:int}")]
     [ProducesResponseType(typeof(AusenciaDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AusenciaDto>> Atualizar(int id, AusenciaCreateDto dto)
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<AusenciaDto>> Atualizar(int id, AusenciaCreateDto dto, [FromQuery] int? versao)
     {
-        var ausencia = await _ausenciaService.AtualizarAsync(this.UsuarioIdAutenticado(), id, dto);
+        var ausencia = await _ausenciaService.AtualizarAsync(this.UsuarioIdAutenticado(), id, dto, versao);
         return Ok(ausencia);
     }
 
-    /// <summary>Cancela (exclui) uma justificativa — só permitido enquanto o status for "Enviada".</summary>
+    /// <summary>
+    /// Cancela (exclui) uma justificativa — só permitido enquanto o status for
+    /// "Enviada". A versão da tela vai na query (<c>?versao=</c>).
+    /// </summary>
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Cancelar(int id)
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Cancelar(int id, [FromQuery] int? versao)
     {
-        await _ausenciaService.CancelarAsync(this.UsuarioIdAutenticado(), id);
+        await _ausenciaService.CancelarAsync(this.UsuarioIdAutenticado(), id, versao);
         return NoContent();
     }
 }

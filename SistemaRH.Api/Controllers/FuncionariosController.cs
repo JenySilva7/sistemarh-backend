@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using SistemaRH.Api.Common;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Models;
@@ -57,22 +58,29 @@ public class FuncionariosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<FuncionarioDto>> Atualizar(int id, FuncionarioUpdateDto dto)
     {
-        return Ok(await _funcionarioService.AtualizarAsync(id, dto));
+        return Ok(await _funcionarioService.AtualizarAsync(id, dto, this.UsuarioIdAutenticado()));
     }
 
-    /// <summary>Encerra o vínculo do funcionário (Status -> Desligado).</summary>
+    /// <summary>
+    /// Encerra o vínculo do funcionário (Status -> Desligado) e, na mesma
+    /// transação, move os subordinados diretos pro gestor dele (ou os deixa
+    /// sem gestor). O corpo é opcional: sem ele, a data é hoje.
+    /// </summary>
     [HttpPost("{id:int}/desligar")]
-    [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(DesligamentoResultadoDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<FuncionarioDto>> Desligar(int id, DesligarFuncionarioDto dto)
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<DesligamentoResultadoDto>> Desligar(
+        int id,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] DesligarFuncionarioDto? dto)
     {
-        return Ok(await _funcionarioService.DesligarAsync(id, dto));
+        return Ok(await _funcionarioService.DesligarAsync(id, dto, this.UsuarioIdAutenticado()));
     }
 
     /// <summary>
     /// Cria o acesso do funcionário ao app com a senha informada — ou, se ele
-    /// já tiver acesso, só redefine a senha.
+    /// já tiver acesso, só redefine a senha (e derruba as sessões abertas).
     /// </summary>
     [HttpPost("{id:int}/acesso-app")]
     [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
@@ -81,7 +89,7 @@ public class FuncionariosController : ControllerBase
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<FuncionarioDto>> DefinirAcessoApp(int id, DefinirAcessoAppDto dto)
     {
-        return Ok(await _funcionarioService.DefinirAcessoAppAsync(id, dto.Senha ?? string.Empty));
+        return Ok(await _funcionarioService.DefinirAcessoAppAsync(id, dto.Senha, this.UsuarioIdAutenticado()));
     }
 
     /// <summary>Ajusta o salário do funcionário (vale na hora) e registra no histórico de remuneração.</summary>
@@ -89,6 +97,7 @@ public class FuncionariosController : ControllerBase
     [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<FuncionarioDto>> AjustarSalario(int id, AjusteSalarioDto dto)
     {
         return Ok(await _funcionarioService.AjustarSalarioAsync(id, dto, this.UsuarioIdAutenticado()));
@@ -99,17 +108,23 @@ public class FuncionariosController : ControllerBase
     [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<FuncionarioDto>> AjustarValeAlimentacao(int id, AjusteValeAlimentacaoDto dto)
     {
         return Ok(await _funcionarioService.AjustarValeAlimentacaoAsync(id, dto, this.UsuarioIdAutenticado()));
     }
 
-    /// <summary>Promove o funcionário: novo cargo, departamento e salário de uma vez, com registro no histórico.</summary>
+    /// <summary>
+    /// Promove o funcionário: novo cargo e/ou departamento (e salário igual ou
+    /// maior), com registro no histórico. Mudando de departamento, a equipe
+    /// antiga passa pro gestor anterior dele, na mesma transação.
+    /// </summary>
     [HttpPost("{id:int}/promocao")]
-    [ProducesResponseType(typeof(FuncionarioDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PromocaoResultadoDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<FuncionarioDto>> Promover(int id, PromocaoDto dto)
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<PromocaoResultadoDto>> Promover(int id, PromocaoDto dto)
     {
         return Ok(await _funcionarioService.PromoverAsync(id, dto, this.UsuarioIdAutenticado()));
     }

@@ -5,14 +5,14 @@ namespace SistemaRH.Api.Dtos;
 /// <summary>Dados pra criar ou editar um cargo.</summary>
 public class CargoCreateDto
 {
-    [Required(ErrorMessage = "O nome do cargo é obrigatório.")]
-    [MinLength(2, ErrorMessage = "O nome precisa ter pelo menos 2 caracteres.")]
-    public string Nome { get; set; } = string.Empty;
+    // Nome (2 a 100), salário base (R$ 0,00 a R$ 1.000.000,00, 2 casas) e
+    // descrição (até 500) são validados no CargoService.
+    public string? Nome { get; set; }
 
-    [Range(0, double.MaxValue, ErrorMessage = "O salário base não pode ser negativo.")]
-    public decimal SalarioBase { get; set; }
+    /// <summary>Opcional (padrão R$ 0,00).</summary>
+    public decimal? SalarioBase { get; set; }
 
-    public string Descricao { get; set; } = string.Empty;
+    public string? Descricao { get; set; }
 }
 
 /// <summary>O que a API devolve ao listar ou consultar um cargo.</summary>

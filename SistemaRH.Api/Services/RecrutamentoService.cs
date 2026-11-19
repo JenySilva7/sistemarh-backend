@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SistemaRH.Api.Common;
 using SistemaRH.Api.Data;
 using SistemaRH.Api.Dtos;
 using SistemaRH.Api.Exceptions;
@@ -16,6 +17,8 @@ public interface IRecrutamentoService
 /// <summary>Acompanhamento de candidatos num processo seletivo.</summary>
 public class RecrutamentoService : IRecrutamentoService
 {
+    private const string MensagemStatusInvalido = MensagensValidacao.MensagemStatusInvalido;
+
     private readonly AppDbContext _db;
 
     public RecrutamentoService(AppDbContext db)
@@ -25,27 +28,31 @@ public class RecrutamentoService : IRecrutamentoService
 
     public async Task<List<RecrutamentoDto>> ListarAsync(StatusRecrutamento? status)
     {
+        Enums.ValidarFiltro(status, MensagemStatusInvalido);
+
         var query = _db.Recrutamentos.AsQueryable();
         if (status is not null)
         {
             query = query.Where(r => r.Status == status);
         }
 
-        var candidatos = await query.OrderByDescending(r => r.DataCandidatura).ToListAsync();
+        var candidatos = await query.OrderByDescending(r => r.DataCandidatura).ThenByDescending(r => r.Id).ToListAsync();
         return candidatos.Select(ParaDto).ToList();
     }
 
     public async Task<RecrutamentoDto> CriarAsync(RecrutamentoCreateDto dto)
     {
+        var hoje = Datas.Hoje();
         var recrutamento = new Recrutamento
         {
-            NomeCandidato = dto.NomeCandidato.Trim(),
-            Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim(),
-            Telefone = string.IsNullOrWhiteSpace(dto.Telefone) ? null : dto.Telefone.Trim(),
-            Vaga = dto.Vaga.Trim(),
-            DataCandidatura = dto.DataCandidatura,
+            NomeCandidato = Textos.ValidarNomePessoa(dto.NomeCandidato, Textos.NomeCandidato),
+            Email = Emails.NormalizarOpcional(dto.Email),
+            Telefone = Telefones.NormalizarOpcional(dto.Telefone),
+            Vaga = Textos.Validar(dto.Vaga, Textos.Vaga),
+            DataCandidatura = Datas.ValidarFaixa(dto.DataCandidatura, "Informe a data da candidatura.",
+                "A data da candidatura", hoje.AddYears(-10), hoje),
             Status = StatusRecrutamento.EmProcesso,
-            Observacoes = dto.Observacoes.Trim(),
+            Observacoes = Textos.ValidarOpcional(dto.Observacoes, Textos.Observacoes),
             CriadoEm = DateTime.UtcNow,
         };
 
@@ -63,10 +70,10 @@ public class RecrutamentoService : IRecrutamentoService
             throw new NotFoundException("Candidato não encontrado.");
         }
 
-        recrutamento.Status = dto.Status;
+        recrutamento.Status = Enums.Validar(dto.Status, MensagemStatusInvalido, MensagemStatusInvalido);
         if (dto.Observacoes is not null)
         {
-            recrutamento.Observacoes = dto.Observacoes.Trim();
+            recrutamento.Observacoes = Textos.ValidarOpcional(dto.Observacoes, Textos.Observacoes);
         }
 
         await _db.SaveChangesAsync();
